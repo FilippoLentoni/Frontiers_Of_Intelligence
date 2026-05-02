@@ -1,0 +1,436 @@
+% Define colours for code listings
+\definecolor{keyword}{RGB}{0,0,128}
+\definecolor{comment}{RGB}{0,96,0}
+\definecolor{string}{RGB}{128,0,0}
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{comment}\itshape,
+  stringstyle=\color{string},
+  showstringspaces=false,
+  frame=single,
+  framerule=0.5pt,
+  numbers=left,
+  numberstyle=\tiny,
+  numbersep=5pt
+}
+
+\chapter{Lab 4: Deploying the Customer‑Support Agent to AgentCore Runtime}
+\label{chap:Lab 4: Deploying the Customer‑Support Agent to AgentCore Runtime}
+
+
+\section{Introduction and Objectives}
+
+After completing Labs 1–3, you now have a sophisticated customer‑support
+agent with memory and gateway integration.  However, the agent still
+runs on your local machine, which limits reliability, scalability and
+observability.  Lab 4 demonstrates how to deploy the agent to
+Amazon Bedrock AgentCore Runtime—a fully managed serverless environment
+that delivers enterprise‑grade reliability, automatic scaling and
+comprehensive monitoring.  By the end of this lab you will:
+
+\begin{itemize}
+  \item Create a runtime‑ready entrypoint using \texttt{BedrockAgentCoreApp}.
+  \item Configure the deployment with the AgentCore Starter Toolkit,
+        including custom JWT authentication via Cognito.
+  \item Launch the runtime, monitor deployment status and invoke the
+        deployed agent with a bearer token.
+  \item Understand how AgentCore Observability collects traces,
+        metrics and logs for debugging and performance tuning.
+\end{itemize}
+
+Compared to the previous labs, only a few additional lines of code are
+required to prepare the agent for deployment.  Most of the work
+happens in infrastructure configuration, which is handled by the
+starter toolkit.
+
+\section{Prerequisites}
+
+Before proceeding ensure that you have:
+
+\begin{itemize}
+  \item Completed Lab 3, including provisioning the AgentCore Gateway
+        and Cognito user pool.
+  \item Python 3.12 or newer installed, along with the packages
+        \texttt{strands‑agents}, \texttt{bedrock‑agentcore‑starter‑toolkit}
+        and \texttt{boto3}.
+  \item Docker, Finch or Podman installed and running.  The starter
+        toolkit uses containers to build and push the agent image.
+  \item An AWS account with permissions to create IAM roles, CodeBuild
+        projects, ECR repositories and AgentCore resources.
+  \item CloudWatch Transaction Search enabled in your AWS region to
+        view AgentCore Observability traces.
+\end{itemize}
+
+\section{Importing Required Libraries and Initialising Memory}
+
+As in earlier labs, begin by importing relevant modules.  For
+production deployment you will also initialise the memory manager
+through the AgentCore Starter Toolkit to ensure that your agent’s
+memory exists in the target region.  The code below checks whether the
+memory has already been created and creates it if necessary.  This step
+allows the notebook to be run independently of Lab 2.
+
+\begin{lstlisting}[language=Python]
+import boto3
+from lab_helpers.utils import get_ssm_parameter
+from bedrock_agentcore_starter_toolkit.operations.memory.manager import MemoryManager
+from bedrock_agentcore.memory.constants import StrategyType
+
+# Establish session and region
+boto_session = boto3.Session()
+REGION = boto_session.region_name
+
+# Create or retrieve the memory resource (if the user skipped Lab 2)
+memory_name = "CustomerSupportMemory"
+memory_manager = MemoryManager(region_name=REGION)
+memory = memory_manager.get_or_create_memory(
+    name=memory_name,
+    strategies=[
+        {
+            StrategyType.USER_PREFERENCE.value: {
+                "name": "CustomerPreferences",
+                "description": "Captures customer preferences and behaviour",
+                "namespaces": ["support/customer/{actorId}/preferences"],
+            }
+        },
+        {
+            StrategyType.SEMANTIC.value: {
+                "name": "CustomerSupportSemantic",
+                "description": "Stores facts from conversations",
+                "namespaces": ["support/customer/{actorId}/semantic"],
+            }
+        },
+    ],
+)
+memory_id = memory["id"]
+\end{lstlisting}
+
+This snippet uses the \texttt{MemoryManager} class to create the
+\texttt{CustomerSupportMemory} resource with two strategies: one for
+storing user preferences and another for storing semantic facts.  It
+returns a memory identifier that will later be passed to the runtime
+environment.
+
+\section{Preparing the Runtime‑Ready Agent}
+
+To deploy an agent to AgentCore Runtime you need to provide an
+\emph{entrypoint} script.  This script must define an asynchronous
+function decorated with \texttt{@app.entrypoint} that accepts a
+payload and an optional context.  The payload is expected to contain a
+\texttt{prompt} field; the context provides request headers such as
+\texttt{Authorization}.  The entrypoint is where you reconstruct your
+agent, using the memory configuration and gateway tools from earlier
+labs.  The code below writes such a file into
+\texttt{lab\_helpers/lab4\_runtime.py}.  Four marked lines show where
+runtime‑specific additions occur.
+
+\begin{lstlisting}[language=Python]
+%%writefile ./lab_helpers/lab4_runtime.py
+import os
+from bedrock_agentcore.runtime import BedrockAgentCoreApp  #### RUNTIME - LINE 1 ####
+from strands import Agent
+from strands.tools.mcp import MCPClient
+from mcp.client.streamable_http import streamablehttp_client
+import boto3
+from strands.models import BedrockModel
+from lab_helpers.utils import get_ssm_parameter
+from lab_helpers.lab1_strands_agent import (
+    get_return_policy,
+    get_product_info,
+    get_technical_support,
+    SYSTEM_PROMPT,
+    MODEL_ID,
+)
+from lab_helpers.lab2_memory import ACTOR_ID, SESSION_ID
+from bedrock_agentcore_starter_toolkit.operations.memory.manager import MemoryManager
+from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
+from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
+
+REGION = boto3.session.Session().region_name
+
+# Initialise Bedrock model
+model = BedrockModel(model_id=MODEL_ID)
+
+# Retrieve memory identifier from environment (provided at launch)
+memory_id = os.environ.get("MEMORY_ID")
+if not memory_id:
+    raise Exception("Environment variable MEMORY_ID is required")
+
+memory_config = AgentCoreMemoryConfig(
+    memory_id=memory_id,
+    session_id=str(SESSION_ID),
+    actor_id=ACTOR_ID,
+    retrieval_config={
+        "support/customer/{actorId}/semantic": RetrievalConfig(top_k=3, relevance_score=0.2),
+        "support/customer/{actorId}/preferences": RetrievalConfig(top_k=3, relevance_score=0.2),
+    },
+)
+
+# Initialise the AgentCore Runtime application
+app = BedrockAgentCoreApp()  #### RUNTIME - LINE 2 ####
+
+@app.entrypoint  #### RUNTIME - LINE 3 ####
+async def invoke(payload, context=None):
+    """Entry point for AgentCore Runtime.
+
+    Extracts the user prompt and JWT token from the request, retrieves
+    the Gateway URL from SSM, constructs an MCP client and invokes
+    the agent.  Returns a plain string response.
+    """
+    # Extract user prompt
+    user_input = payload.get("prompt", "")
+
+    # Extract authorisation header from context (if provided)
+    request_headers = context.request_headers or {}
+    auth_header = request_headers.get('Authorization', '')
+    print(f"Authorization header: {auth_header}")
+
+    # Retrieve gateway details
+    gateway_id = get_ssm_parameter("/app/customersupport/agentcore/gateway_id")
+    gateway_client = boto3.client("bedrock-agentcore-control", region_name=REGION)
+    gateway_response = gateway_client.get_gateway(gatewayIdentifier=gateway_id)
+    gateway_url = gateway_response['gatewayUrl']
+
+    # Only proceed if both gateway URL and auth token are present
+    if gateway_url and auth_header:
+        try:
+            mcp_client = MCPClient(lambda: streamablehttp_client(
+                url=gateway_url,
+                headers={"Authorization": auth_header}
+            ))
+            with mcp_client:
+                tools = [
+                    get_product_info,
+                    get_return_policy,
+                    get_technical_support,
+                ] + mcp_client.list_tools_sync()
+                agent = Agent(
+                    model=model,
+                    tools=tools,
+                    system_prompt=SYSTEM_PROMPT,
+                    session_manager=AgentCoreMemorySessionManager(memory_config, REGION),
+                )
+                response = agent(user_input)
+                # Return plain text for synchronous invocation
+                return response.message["content"][0]["text"]
+        except Exception as e:
+            print(f"MCP client error: {str(e)}")
+            return f"Error: {str(e)}"
+    else:
+        return "Error: Missing gateway URL or authorization header"
+
+if __name__ == "__main__":
+    app.run()  #### RUNTIME - LINE 4 ####
+\end{lstlisting}
+
+Key takeaways from this entrypoint:
+
+\begin{itemize}
+  \item The environment variable \texttt{MEMORY\_ID} is required so that the
+        runtime can connect to the correct memory resource.  This variable
+        will be passed by the deployment process.
+  \item The Gateway URL and JWT token are retrieved at invocation time
+        from SSM and the request header, respectively.  The token is
+        forwarded to the Gateway to authorise the call.
+  \item The code wraps the MCP client in a context manager to ensure
+        resources are cleaned up and tools are automatically discovered.
+  \item The function returns plain text rather than a structured object.
+        AgentCore Runtime expects the entrypoint to return a string or
+        dictionary representing the response body.
+\end{itemize}
+
+\section{Configuring the AgentCore Runtime Deployment}
+
+The AgentCore Starter Toolkit provides a high‑level API for configuring
+and launching an AgentCore Runtime.  This configuration step
+specifies the entrypoint file, the IAM role that the runtime will
+assume, whether to automatically create an Amazon Elastic Container
+Registry (ECR) repository, and the requirements file to be installed in
+the container.  It also sets up JWT‑based authentication by
+referencing the Cognito client ID and discovery URL stored in SSM.
+
+\begin{lstlisting}[language=Python]
+from bedrock_agentcore_starter_toolkit import Runtime
+from lab_helpers.utils import create_agentcore_runtime_execution_role, get_or_create_cognito_pool
+
+# Create an execution role granting the runtime permission to
+# access AWS services (S3, DynamoDB, Bedrock, etc.)
+execution_role_arn = create_agentcore_runtime_execution_role()
+
+# Initialise the runtime toolkit
+agentcore_runtime = Runtime()
+
+response = agentcore_runtime.configure(
+    entrypoint="lab_helpers/lab4_runtime.py",
+    execution_role=execution_role_arn,
+    auto_create_ecr=True,
+    requirements_file="requirements.txt",
+    region=REGION,
+    agent_name="customer_support_agent",
+    authorizer_configuration={
+        "customJWTAuthorizer": {
+            "allowedClients": [get_ssm_parameter("/app/customersupport/agentcore/client_id")],
+            "discoveryUrl": get_ssm_parameter("/app/customersupport/agentcore/cognito_discovery_url"),
+        }
+    },
+    # Forward specific headers to the runtime to propagate OAuth tokens
+    request_header_configuration={
+        "requestHeaderAllowlist": [
+            "Authorization",
+            "X-Amzn-Bedrock-AgentCore-Runtime-Custom-H1",
+        ]
+    },
+)
+print("Configuration completed:", response)
+\end{lstlisting}
+
+This call generates two artefacts: a \texttt{Dockerfile} that defines
+how the container is built and a \texttt{.bedrock\_agentcore.yaml}
+configuration file.  The IAM execution role provides runtime access to
+AWS services, while the custom JWT authorizer enforces that only
+clients with valid Cognito tokens can invoke the agent.  The header
+allowlist ensures that the \texttt{Authorization} header is passed from
+the caller to the entrypoint so that tokens are not stripped out by
+API Gateway or other intermediaries.
+
+\section{Launching the Runtime and Checking Status}
+
+After configuration, call \texttt{launch} to build and deploy the
+container image.  Behind the scenes the starter toolkit uses AWS
+CodeBuild to build the image, pushes it to ECR and creates the
+AgentCore Runtime resources.  Pass the memory identifier via
+\texttt{env\_vars} so that the entrypoint can find the correct
+memory.
+
+\begin{lstlisting}[language=Python]
+from lab_helpers.utils import put_ssm_parameter
+
+# Launch the agent (builds and deploys the container)
+launch_result = agentcore_runtime.launch(env_vars={"MEMORY_ID": memory_id})
+print("Launch completed:", launch_result.agent_arn)
+
+# Persist the runtime ARN for later use
+put_ssm_parameter("/app/customersupport/agentcore/runtime_arn", launch_result.agent_arn)
+
+# Wait for the runtime to become READY
+import time
+status_response = agentcore_runtime.status()
+status = status_response.endpoint["status"]
+end_status = ["READY", "CREATE_FAILED", "DELETE_FAILED", "UPDATE_FAILED"]
+while status not in end_status:
+    print(f"Waiting for deployment... Current status: {status}")
+    time.sleep(10)
+    status_response = agentcore_runtime.status()
+    status = status_response.endpoint["status"]
+print(f"Final status: {status}")
+\end{lstlisting}
+
+The \texttt{status} method polls the runtime’s state until it reaches
+\texttt{READY} or a failure condition.  If the runtime already
+exists, you can pass \texttt{auto\_update\_on\_conflict=True} to
+\texttt{launch} to update the existing deployment.  Once the status is
+\texttt{READY}, the runtime exposes an invocation endpoint that can
+handle concurrent requests at scale.
+
+\section{Invoking the Deployed Agent}
+
+With the runtime active, you can test it by sending requests via the
+starter toolkit.  You must supply a valid Cognito access token and a
+session identifier.  The toolkit will automatically propagate the
+token as an Authorization header and create a unique session ID if
+none is provided.  The examples below demonstrate both session
+continuity and new sessions.
+
+\begin{lstlisting}[language=Python]
+import uuid
+
+# Retrieve an access token (must still be valid)
+from lab_helpers.utils import get_or_create_cognito_pool
+access_token = get_or_create_cognito_pool(refresh_token=True)
+
+# Extract runtime ID from the ARN
+runtime_id = launch_result.agent_arn.split(":")[-1].split("/")[-1]
+print(f"Runtime ID: {runtime_id}")
+
+session_id = str(uuid.uuid4())
+
+# First invocation: list tools
+prompt = "List all of your tools"
+response = agentcore_runtime.invoke(
+    {"prompt": prompt},
+    bearer_token=access_token["bearer_token"],
+    session_id=session_id,
+)
+print(response["response"])
+
+# Second invocation with the same session (session continuity)
+prompt2 = "Tell me detailed information about the technical documentation on installing a new CPU"
+response = agentcore_runtime.invoke(
+    {"prompt": prompt2},
+    bearer_token=access_token["bearer_token"],
+    session_id=session_id,
+)
+print(response["response"])
+
+# Third invocation with a new session (new customer)
+session_id2 = str(uuid.uuid4())
+prompt3 = "I have a Gaming Console Pro device, I want to check my warranty status, warranty serial number is MNO33333333."
+response = agentcore_runtime.invoke(
+    {"prompt": prompt3},
+    bearer_token=access_token["bearer_token"],
+    session_id=session_id2,
+)
+print(response["response"])
+\end{lstlisting}
+
+The first call lists all available tools (three local and two MCP) to
+verify that the runtime is correctly configured.  The second call uses
+the same session ID, allowing the agent to remember previous context
+and memory state.  The third call uses a different session ID,
+simulating a new customer; the agent will not have prior context and
+will ask clarifying questions if needed.
+
+\section{Observability with CloudWatch}
+
+AgentCore Runtime integrates out‑of‑the‑box with AgentCore
+Observability to send traces, metrics and logs to CloudWatch.  Once
+your runtime is running, you can explore these observability features
+in the AWS console under \texttt{CloudWatch \rightarrow GenAI
+Observability \rightarrow Bedrock AgentCore}.  There you will find
+dashboards for:
+
+\begin{itemize}
+  \item \textbf{Agents}: a high‑level overview showing throughput,
+        latency and error rates across your deployed agents.
+  \item \textbf{Sessions}: a list of session IDs with details on
+        conversation length, tool usage and memory retrievals.
+  \item \textbf{Traces}: deep traces of individual requests showing
+        model invocation, tool calls, memory operations and latency
+        breakdown.  You can filter, search and export traces for
+        debugging and performance tuning.
+\end{itemize}
+
+These dashboards help you identify performance bottlenecks, monitor
+tool invocation patterns and ensure that your agent behaves as
+expected in production.  You can also query logs using CloudWatch
+Logs Insights or integrate with other observability tools if needed.
+
+\section{Summary and Next Steps}
+
+In this lab you transformed your agent into a production‑ready service
+running on Amazon Bedrock AgentCore Runtime.  You wrote an entrypoint
+script using \texttt{BedrockAgentCoreApp}, configured the runtime
+deployment with the starter toolkit, launched the container, tested
+session continuity and observed how to monitor the agent using
+CloudWatch.  The runtime automatically scales to handle concurrent
+requests, provides secure access via JWT tokens and offers
+comprehensive observability.
+
+Remaining challenges include providing a user‑friendly interface for
+end customers and evaluating the agent’s performance over time.
+These topics are addressed in Labs 5 and 6.  In the next lab you will
+configure online evaluations to continuously monitor quality metrics
+and learn how to interpret the results.
+

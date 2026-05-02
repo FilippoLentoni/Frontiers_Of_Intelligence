@@ -1,0 +1,535 @@
+% Define colours for code listings
+\definecolor{keyword}{RGB}{0,0,128}
+\definecolor{comment}{RGB}{0,96,0}
+\definecolor{string}{RGB}{128,0,0}
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{comment}\itshape,
+  stringstyle=\color{string},
+  showstringspaces=false,
+  frame=single,
+  framerule=0.5pt,
+  numbers=left,
+  numberstyle=\tiny,
+  numbersep=5pt
+}
+
+
+\chapter{Lab 3: Scaling the Customer‑Support Agent with AgentCore Gateway and Identity}
+\label{chap:Lab 3: Scaling the Customer‑Support Agent with AgentCore Gateway and Identity}
+
+\section{Introduction and Motivation}
+
+The previous labs equipped you with a locally running customer‑support agent
+complete with custom tools and persistent conversation memory.  However, the
+prototype still suffers from limitations common to early experiments: each
+agent bundles its own copy of every tool, there is no centralised security
+control and your laptop cannot sustainably serve multiple users.  Lab 3
+addresses these shortcomings by introducing the \emph{AgentCore Gateway} and
+\emph{AgentCore Identity}.  Together they allow tools to be published once
+and reused across any number of agents, while ensuring that only authorised
+callers can invoke them.
+
+The Gateway is a managed server that exposes functions (e.g., AWS Lambda
+functions, REST APIs or other services) as \emph{Model Context Protocol
+\,MCP\,} tools.  MCP standardises how tools are described and invoked so
+that any agent framework can discover and use them.  AgentCore Identity
+provides a unified authentication layer: inbound authentication verifies
+that the caller has a valid OAuth token (issued by identity providers
+such as Cognito, Okta or Entra), while outbound authentication securely
+retrieves credentials needed to call downstream services.  These
+capabilities transform your agent into an enterprise‑ready solution
+without rewriting your existing tool logic.
+
+\section{Prerequisites}
+
+Before beginning this lab, ensure the following requirements are met:
+
+\begin{itemize}
+  \item \textbf{Lab 2 completed.}  You should already have a working
+    customer‑support agent with memory integration.  The memory resource
+    identifier (\texttt{memory\_id}) and session management code will be reused.
+  \item \textbf{AWS credentials configured.}  The Gateway and Identity
+    services require permissions to create resources such as Cognito user
+    pools, IAM roles and Lambda functions.  It is assumed that the
+    accompanying CloudFormation template has provisioned a user pool, a
+    gateway IAM role, a Lambda execution role and DynamoDB tables for
+    warranty and customer profile data.
+  \item \textbf{Python environment.}  Continue using the virtual
+    environment from previous labs and ensure that the following packages
+    are installed:
+
+\begin{lstlisting}[language=bash]
+pip install strands-agents bedrock-agentcore-starter-toolkit mcp-client boto3
+\end{lstlisting}
+
+  \item \textbf{External tools.}  Two Lambda functions have been provided:
+    \texttt{check\_warranty\_status} to query warranty information from a
+    DynamoDB table and \texttt{web\_search} to perform DuckDuckGo searches.
+    These functions are defined in the \texttt{prerequisite/lambda/python}
+    folder of the workshop repository.  We will expose them through the
+    Gateway.
+\end{itemize}
+
+\section{Importing Required Libraries}
+
+As with previous labs, begin by importing the necessary Python modules and
+initialising clients.  The AgentCore Gateway is controlled via the
+\texttt{bedrock-agentcore-control} client; the \texttt{MCPClient} from the
+\texttt{strands} library helps us call Gateway tools from within the
+agent.
+
+\begin{lstlisting}[language=Python]
+# Import standard libraries
+import os
+import sys
+import boto3
+
+# Strands Agent and model classes
+from strands import Agent
+from strands.models import BedrockModel
+
+# MCP client for connecting to Gateway tools
+from strands.tools.mcp import MCPClient
+from mcp.client.streamable_http import streamablehttp_client
+
+# Helper functions provided by the workshop repository
+from lab_helpers.utils import (
+    get_or_create_cognito_pool,
+    put_ssm_parameter,
+    get_ssm_parameter,
+    load_api_spec,
+)
+
+# Instantiate the regional clients
+REGION = boto3.session.Session().region_name
+gateway_client = boto3.client(
+    "bedrock-agentcore-control",
+    region_name=REGION,
+)
+
+print("✅ Libraries imported successfully!")
+
+\end{lstlisting}
+
+This snippet obtains the current AWS region and creates a client for the
+AgentCore control plane.  It also imports a utility function
+\texttt{get\_or\_create\_cognito\_pool} that will create or retrieve a
+Cognito user pool for authentication.  The \texttt{load\_api\_spec}
+function loads the API specification file that describes the tools.
+
+\section{Exposing Existing Functions as MCP Tools}
+
+The first step in centralising tools is to migrate functions from local
+modules into the Gateway.  In previous labs the warranty and web search
+capabilities were implemented directly within the agent.  Here they will be
+run inside AWS Lambda functions.  A thin wrapper in the Lambda handler
+inspects the incoming event to determine which tool to call.  The event
+contains the tool name (passed via the custom context field
+\texttt{bedrockAgentCoreToolName}) and a JSON payload with user inputs.
+
+An excerpt of the Lambda handler illustrates the routing logic:
+
+\begin{lstlisting}[language=Python]
+def lambda_handler(event, context):
+    """Dispatches calls to the appropriate tool based on the tool name.
+
+    Parameters
+    ----------
+    event: dict
+        The event contains 'body' with JSON-serialised tool parameters and
+        a custom context entry 'bedrockAgentCoreToolName' specifying which
+        tool to invoke.
+    context: object
+        Lambda context providing runtime information.
+
+    Returns
+    -------
+    dict
+        A response dictionary with a status code and JSON body.
+    """
+    # Extract the tool name from the Lambda context
+    extended_tool_name = context.client_context.custom["bedrockAgentCoreToolName"]
+    tool_name = extended_tool_name.split("___")[1]
+
+    # Dispatch to the appropriate function
+    if tool_name == "check_warranty_status":
+        serial_number = event["body"].get("serial_number")
+        customer_email = event["body"].get("customer_email")
+        result = check_warranty_status(serial_number, customer_email)
+        return {"statusCode": 200, "body": result}
+    elif tool_name == "web_search":
+        keywords = event["body"].get("keywords")
+        region = event["body"].get("region", "us-en")
+        max_results = event["body"].get("max_results", 5)
+        result = web_search(keywords, region, max_results)
+        return {"statusCode": 200, "body": result}
+    else:
+        return {"statusCode": 400, "body": f"Unknown tool: {tool_name}"}
+
+\end{lstlisting}
+
+The helper functions \texttt{check\_warranty\_status} and \texttt{web\_search}
+contain the actual logic.  The warranty function looks up a serial number
+and (optionally) verifies ownership via the customer email; the web search
+function uses the DuckDuckGo library to return a list of search results.
+
+\section{Defining Tool Schemas with an API Specification}
+
+The Gateway requires a specification file that describes each tool’s name,
+description and input schema.  This file uses a JSON array where each
+object corresponds to one tool.  Below is the specification for the
+\texttt{check\_warranty\_status} and \texttt{web\_search} tools.  Note
+that \texttt{serial\_number} is mandatory for the warranty check, while
+\texttt{keywords} is mandatory for the web search.  Optional fields have
+defaults.
+
+\begin{lstlisting}[language=json]
+[
+  {
+    "name": "check_warranty_status",
+    "description": "Check the warranty status of a product using its serial number and optionally verify via email",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "serial_number": { "type": "string" },
+        "customer_email": { "type": "string" }
+      },
+      "required": ["serial_number"]
+    }
+  },
+  {
+    "name": "web_search",
+    "description": "Search the web for updated information using DuckDuckGo",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keywords": {
+          "type": "string",
+          "description": "The search query keywords"
+        },
+        "region": {
+          "type": "string",
+          "description": "The search region (e.g., us-en, uk-en, ru-ru)"
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "The maximum number of results to return"
+        }
+      },
+      "required": ["keywords"]
+    }
+  }
+]
+\end{lstlisting}
+
+This specification lives at \texttt{prerequisite/lambda/api\_spec.json} in
+the workshop repository.  It will be passed to the Gateway when creating
+the Lambda target in Step \ref{sec:add-target}.
+
+\section{Creating the AgentCore Gateway with OAuth Authentication}
+
+To expose the Lambda functions via MCP, you must create an AgentCore
+Gateway.  The Gateway unifies all tools under a single URL and enforces
+security via inbound authentication.  In this example we use a custom
+JWT authorizer that relies on Amazon Cognito to validate OAuth access
+tokens.  The discovery URL and client ID are retrieved from Systems
+Manager Parameter Store by the helper function
+\texttt{get\_or\_create\_cognito\_pool}.  The Gateway itself is created
+using the \texttt{create\_gateway} call on the control client.
+
+\begin{lstlisting}[language=Python]
+# Name of the Gateway
+gateway_name = "customersupport-gw"
+
+# Retrieve or create a Cognito user pool and client
+cognito_config = get_or_create_cognito_pool(refresh_token=True)
+
+# Define custom JWT authorizer configuration
+auth_config = {
+    "customJWTAuthorizer": {
+        "allowedClients": [cognito_config["client_id"]],
+        "discoveryUrl": cognito_config["discovery_url"],
+    }
+}
+
+try:
+    print(f"Creating gateway in region {REGION} with name: {gateway_name}")
+    response = gateway_client.create_gateway(
+        name=gateway_name,
+        roleArn=get_ssm_parameter("/app/customersupport/agentcore/gateway_iam_role"),
+        protocolType="MCP",
+        authorizerType="CUSTOM_JWT",
+        authorizerConfiguration=auth_config,
+        description="Customer Support AgentCore Gateway",
+    )
+
+    # Persist gateway identifiers for later use
+    gateway_id = response["gatewayId"]
+    put_ssm_parameter("/app/customersupport/agentcore/gateway_id", gateway_id)
+    put_ssm_parameter("/app/customersupport/agentcore/gateway_name", gateway_name)
+    put_ssm_parameter("/app/customersupport/agentcore/gateway_arn", response["gatewayArn"])
+    put_ssm_parameter("/app/customersupport/agentcore/gateway_url", response["gatewayUrl"])
+    print(f"✅ Gateway created successfully with ID: {gateway_id}")
+except Exception:
+    # If gateway already exists, retrieve its details from Parameter Store
+    gateway_id = get_ssm_parameter("/app/customersupport/agentcore/gateway_id")
+    response = gateway_client.get_gateway(gatewayIdentifier=gateway_id)
+    print(f"Found existing gateway with ID: {gateway_id}")
+
+# Consolidate gateway details in a dictionary for later use
+gateway = {
+    "id": gateway_id,
+    "name": gateway_name,
+    "gateway_url": get_ssm_parameter("/app/customersupport/agentcore/gateway_url"),
+    "gateway_arn": get_ssm_parameter("/app/customersupport/agentcore/gateway_arn"),
+}
+\end{lstlisting}
+
+The call to \texttt{create\_gateway} registers a new MCP server.  It
+specifies the ARN of an IAM role that allows the Gateway to invoke
+the Lambda functions and access Parameter Store.  If a gateway already
+exists, the code simply fetches its identifier and continues.
+
+\section{Attaching the Lambda Target to the Gateway\label{sec:add-target}}
+
+With the Gateway created, the next step is to attach the Lambda functions
+as a \emph{target}.  A target bundles the backend implementation (our
+Lambda function), the tool specification and credentials used to call the
+backend.  Gateway supports multiple targets, enabling you to group related
+tools together or connect to different microservices under a single
+endpoint.
+
+\begin{lstlisting}[language=Python]
+try:
+    api_spec_file = "./prerequisite/lambda/api_spec.json"
+    if not os.path.exists(api_spec_file):
+        print(f"❌ API specification file not found: {api_spec_file}")
+        sys.exit(1)
+
+    # Load the tool definitions
+    api_spec = load_api_spec(api_spec_file)
+
+    # Configure the target to invoke our Lambda function via MCP
+    lambda_target_config = {
+        "mcp": {
+            "lambda": {
+                "lambdaArn": get_ssm_parameter("/app/customersupport/agentcore/lambda_arn"),
+                "toolSchema": {"inlinePayload": api_spec},
+            }
+        }
+    }
+
+    # Use the Gateway IAM role to supply credentials to the Lambda backend
+    credential_config = [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+
+    # Create the target on the Gateway
+    response = gateway_client.create_gateway_target(
+        gatewayIdentifier=gateway_id,
+        name="LambdaUsingSDK",
+        description="Lambda Target using SDK",
+        targetConfiguration=lambda_target_config,
+        credentialProviderConfigurations=credential_config,
+    )
+
+    print(f"✅ Gateway target created: {response['targetId']}")
+except Exception as e:
+    print(f"❌ Error creating gateway target: {str(e)}")
+\end{lstlisting}
+
+This code loads the API specification, constructs a target configuration
+specifying the Lambda ARN and tool schema, and sets the credential provider
+type to \texttt{GATEWAY\_IAM\_ROLE}.  The IAM role defined earlier grants
+the Gateway permission to execute the Lambda.  On success, the target
+identifier is printed.
+
+\section{Building a Secure MCP Client and Agent}
+
+Once the Gateway and target are configured, you can create a secure client
+to call the tools.  The \texttt{MCPClient} from Strands accepts a factory
+function that returns a streaming HTTP client connected to the Gateway URL
+with a valid Authorization header.  The Cognito helper returns a bearer
+token for the currently authenticated user.
+
+\subsection{Set up the MCP Client}
+
+\begin{lstlisting}[language=Python]
+# Display the Gateway URL for reference
+print(f"Gateway Endpoint - MCP URL: {gateway['gateway_url']}")
+
+# Create the MCP client using a bearer token from Cognito
+mcp_client = MCPClient(
+    lambda: streamablehttp_client(
+        gateway["gateway_url"],
+        headers={"Authorization": f"Bearer {cognito_config['bearer_token']}"},
+    )
+)
+\end{lstlisting}
+
+The \texttt{streamablehttp\_client} is provided by the MCP library.  It
+establishes an HTTP connection to the Gateway and automatically streams
+responses.  Passing a lambda into \texttt{MCPClient} defers client
+creation until the context manager is entered, ensuring that tokens are
+fresh.
+
+\subsection{Create the Agent with Local and Gateway Tools}
+
+The final step is to assemble the agent, combining both local tools and
+those retrieved from the Gateway.  The following function constructs a
+Strands \texttt{Agent} using the Haiku model from Bedrock, the memory
+configuration from Lab 2 and the list of tools.  It must be called inside
+a \texttt{with mcp\_client} context so that tool discovery happens with a
+valid connection.
+
+\begin{lstlisting}[language=Python]
+from lab_helpers.lab1_strands_agent import (
+    get_product_info,
+    get_return_policy,
+    get_technical_support,
+    SYSTEM_PROMPT,
+)
+
+import uuid
+from lab_helpers.lab2_memory import create_or_get_memory_resource
+from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
+from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
+
+# Create or retrieve the memory resource
+memory_id = create_or_get_memory_resource()
+
+# Generate a new session and define the customer identifier
+SESSION_ID = str(uuid.uuid4())
+CUSTOMER_ID = "customer_001"
+
+# Configure memory retrieval for preferences and semantic memories
+memory_config = AgentCoreMemoryConfig(
+    memory_id=memory_id,
+    session_id=SESSION_ID,
+    actor_id=CUSTOMER_ID,
+    retrieval_config={
+        "support/customer/{actorId}/semantic": RetrievalConfig(top_k=3, relevance_score=0.2),
+        "support/customer/{actorId}/preferences": RetrievalConfig(top_k=3, relevance_score=0.2),
+    },
+)
+
+# Initialise the Bedrock model
+model = BedrockModel(
+    model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    temperature=0.3,
+    region_name=REGION,
+)
+
+def create_agent(prompt: str) -> str:
+    """Constructs and invokes a customer support agent using local and MCP tools.
+
+    Parameters
+    ----------
+    prompt : str
+        The user's natural language question.
+
+    Returns
+    -------
+    str
+        The agent's textual response.
+    """
+    try:
+        with mcp_client:
+            # Combine local tools with those exposed via the Gateway
+            tools = [
+                get_product_info,
+                get_return_policy,
+                get_technical_support,
+            ] + mcp_client.list_tools_sync()
+
+            # Create the agent
+            agent = Agent(
+                model=model,
+                tools=tools,
+                system_prompt=SYSTEM_PROMPT,
+                session_manager=AgentCoreMemorySessionManager(memory_config, REGION),
+            )
+
+            # Invoke the agent and return the response
+            return agent(prompt)
+    except Exception as e:
+        raise RuntimeError(f"Agent invocation failed: {str(e)}")
+
+print("✅ Customer support agent created successfully!")
+\end{lstlisting}
+
+The function calls \texttt{mcp\_client.list\_tools\_sync()} to obtain a list
+of tool descriptors from the Gateway.  These descriptors are callable
+objects; when the agent selects one, the MCP client automatically
+marshals the request into a JSON payload, adds the OAuth token and sends
+it to the Gateway.  The agent continues to use local tools for
+product information, return policy and knowledge base retrieval, since
+these remain specific to the customer support use case.
+
+\section{Testing the Enhanced Agent}
+
+To verify that the gateway integration works properly, run a series of
+test prompts.  The following code iterates through several examples and
+prints the agent’s response.  You should see both local and MCP tools
+being used: for instance, queries about warranty status will trigger the
+\texttt{check\_warranty\_status} tool via the Gateway, while troubleshooting
+questions will call the knowledge‑base tool.
+
+\begin{lstlisting}[language=Python]
+test_prompts = [
+    "List all of your tools",  # Should list local and Gateway tools
+    "I bought an iPhone 14 last month. It heats up—how do I fix it?",
+    "I have a Gaming Console Pro device. I want to check my warranty status. The serial number is MNO33333333.",
+    "What are the warranty support guidelines?",
+    "How can I fix a Lenovo Thinkpad with a blue screen?",
+    "Tell me detailed information about the technical documentation on installing a new CPU",
+]
+
+def test_agent_responses(prompts):
+    for i, prompt in enumerate(prompts, 1):
+        print(f"\nTest Case {i}: {prompt}")
+        print("-" * 50)
+        try:
+            response = create_agent(prompt)
+            print(response)
+        except Exception as e:
+            print(f"Error: {str(e)}")
+        print("-" * 50)
+
+# Run the tests
+test_agent_responses(test_prompts)
+
+print("\n✅ Basic testing completed!")
+\end{lstlisting}
+
+Running this function should confirm that the agent now recognises five
+tools: the three local tools and the two MCP tools from the Gateway.  A
+query about warranty will produce a structured response from the Lambda
+function, while general troubleshooting questions will still leverage the
+knowledge base.  You may notice slightly longer latency when the agent
+calls remote tools due to network overhead.
+
+\section{Summary and Next Steps}
+
+In this lab you transformed a simple, locally bound agent into a modular
+system capable of securely accessing centralised tools.  The AgentCore
+Gateway provides a single entry point for multiple tools, enabling
+reusability across different agents and use cases.  AgentCore Identity
+ensures that only authorised callers can invoke these tools and that
+downstream services are accessed with the correct credentials.  By
+delegating common capabilities (like warranty checks and web searches) to
+shared infrastructure, you eliminate duplication and simplify maintenance.
+
+You have also seen how to integrate the Gateway with an existing agent:
+initialising an MCP client with a bearer token, combining local and
+remote tools, and configuring memory to maintain state across sessions.
+The testing script demonstrates the agent’s ability to seamlessly invoke
+both local and centralised tools.
+
+Lab 3 leaves you with a functional yet still locally executed prototype.
+In Lab 4 you will deploy this agent to the serverless AgentCore Runtime,
+gain comprehensive observability and enable automatic scaling.  You will
+also address remaining limitations such as manual resource management and
+lack of production‑ready infrastructure.
+

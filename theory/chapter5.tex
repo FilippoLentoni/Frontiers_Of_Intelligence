@@ -1,0 +1,99 @@
+% chapters/theory/05.tex
+
+\chapter{Preference Tuning and Alignment}
+\label{chap:alignment-preference-tuning}
+
+A model that has been pretrained can predict plausible continuations of text, and a model that has been instruction-tuned (SFT) can respond in a helpful “assistant-like” way. Yet even a strong SFT model may still feel wrong in subtle, product-critical ways: it may sound unfriendly, be overly cautious or not cautious enough, fail to follow a preferred tone, or respond unsafely. These are not primarily problems of linguistic competence; they are problems of alignment. The central theme of this chapter is that alignment is often easier to specify as preference—\emph{I like this response more than that one}—than as a single “perfect target” response. Preference tuning provides a practical way to incorporate both positive and negative signal into model behavior.
+
+\section{Why preference tuning exists}
+Supervised fine-tuning teaches a model what to do by providing input-output demonstrations. In many settings, however, the most important improvements are not about teaching new capabilities but about shaping the distribution of outputs. If a model answers correctly but in the wrong tone, the error is not factual; it is stylistic. If it answers in a way that violates a safety or policy guideline, the issue is not language ability; it is alignment with constraints.
+
+Preference tuning is motivated by the observation that it is often easier to judge than to author. Writing an excellent poem from scratch is hard; choosing which of two poems is better is easier and more consistent. The same holds for assistant behavior. Moreover, preference tuning naturally injects negative signal: it can teach the model not only what to produce but also what to avoid. This is difficult to do directly with standard SFT unless one rewrites every “bad” output into a “good” output.
+
+Preference tuning is not a substitute for good instruction data. If an SFT model fails frequently, the root cause may be missing coverage or poor quality in the instruction-tuning dataset. Preference tuning is most effective when the model already behaves reasonably and we want to refine how it behaves.
+
+\section{Preference data: how it is collected}
+Preference tuning is driven by preference data. There are multiple ways to represent preferences, but one dominates practice because it is simple and reliable.
+
+In a pointwise setting, a rater assigns an absolute score to a response. This is difficult to calibrate: it is hard to decide whether a response deserves 0.6 or 0.8, and different raters interpret the scale differently. In a listwise setting, a rater ranks multiple responses. This is more informative, but it increases cognitive load and can increase inconsistency.
+
+The most common format is pairwise preference data. Given a prompt and two candidate responses, a rater simply chooses which is better. Pairwise judgments are easier for humans and tend to have higher agreement. In the simplest form, the label is binary: response A is preferred over response B. More granular schemes exist (“slightly better,” “much better,” etc.), but binary comparisons are common because they reduce ambiguity.
+
+Candidate responses can be obtained in two main ways. The first is sampling: run the same prompt through a model multiple times with a positive temperature so that it produces different completions, then ask a rater to compare them. The second is rewrite-based: take an output that is known to be undesirable and rewrite it into a better one. Rewrite-based pairs are often stronger supervision, but they are more expensive because they require crafting a high-quality alternative.
+
+The rating signal can come from humans—this is the classic RLHF setting—or from AI judges, in which case one sometimes sees the term “RL from AI feedback.” The term “human feedback” in RLHF refers to the source of labels for preference data, not necessarily to every stage of the training pipeline.
+
+\section{RLHF: the two-stage recipe}
+A common implementation of preference tuning is Reinforcement Learning from Human Feedback (RLHF). RLHF is not a single algorithm; it is a pipeline with two distinct stages. First, one trains a reward model that learns to score completions in a way that reflects preferences. Second, one uses reinforcement learning to optimize the language model so that it produces completions with high reward, while staying close to a reference model to avoid pathological behavior.
+
+The high-level intuition is straightforward. The LLM is treated as a policy: given a state (the prompt and the partial generation so far), it chooses an action (the next token). The environment is the vocabulary. Once a full completion is generated, we obtain a reward signal that tells us whether the completion is good. In preference tuning, that reward signal is derived from preference data. Compared to SFT, this reward is sparse: it is usually one scalar per completion rather than dense supervision for every token.
+
+\section{Stage 1: reward modeling via Bradley--Terry}
+To train a reward model, we want a function that maps a prompt-response pair to a scalar score. The training data consists of preference pairs: for a given prompt, we have a winning response and a losing response. The goal is to learn scores such that winners are scored higher than losers.
+
+A standard probabilistic formulation for pairwise preferences is the Bradley--Terry model. If response \(y_i\) is preferred to response \(y_j\), the probability of this event is modeled as
+\[
+P(y_i \succ y_j) = \frac{\exp(r_i)}{\exp(r_i) + \exp(r_j)} = \sigma(r_i - r_j),
+\]
+where \(r_i\) and \(r_j\) are scalar scores produced by the reward model for the two responses (conditioned on the same prompt), and \(\sigma(\cdot)\) is the sigmoid function. This formulation has a clear interpretation: if \(r_i\) is much larger than \(r_j\), the preference probability approaches 1.
+
+Given a dataset of preference pairs \((x, y^{(w)}, y^{(l)})\), where \(w\) denotes the preferred (winning) response and \(l\) the dispreferred (losing) response, we can train by maximum likelihood. The likelihood of the dataset is the product over examples of \(\sigma(r(x,y^{(w)}) - r(x,y^{(l)}))\). Taking logs and converting to a minimization yields the standard loss:
+\[
+\mathcal{L}_{\text{RM}} = -\mathbb{E}\left[\log \sigma\left(r(x,y^{(w)}) - r(x,y^{(l)})\right)\right].
+\]
+This resembles a binary cross-entropy objective, but the important point is conceptual: the reward model is trained on pairs so that score differences align with preferences.
+
+A subtlety is worth emphasizing. Although training is pairwise, the resulting reward model is typically used pointwise: given a single prompt and a single completion, it outputs one scalar score. Pairwise training is simply the mechanism that teaches the model what “high” and “low” should mean.
+
+Reward models can be built from different backbones. One can use a decoder-only LLM with an added scalar head, or an encoder-only model that maps the concatenated prompt-response into a pooled representation and then a score. In modern practice, decoder-only backbones are common simply because they are ubiquitous and convenient.
+
+Finally, preference labels are only as good as the guidelines that produced them. Human ratings can be noisy; teams often invest in clear rubrics and rater calibration. Reward modeling does not eliminate subjectivity; it compresses it into a scalar function.
+
+\section{Stage 2: policy optimization and why PPO appears}
+Once a reward model exists, the next step is to optimize the LLM so it generates high-reward completions. The basic loop is: sample a completion for a prompt, score it with the reward model, update the policy to increase expected reward. If this were done naïvely, it would go wrong quickly.
+
+There are several reasons to constrain policy updates. The first is that the reference model—typically the SFT model—already contains valuable knowledge and instruction-following behavior. If we deviate too far, we risk degrading general usefulness. The second is reward hacking: the reward model is an approximation, and if the policy optimizes it aggressively, it may exploit its imperfections and produce behavior that maximizes the reward while failing the intended objective. The third is optimization stability: large policy updates can destabilize training.
+
+This is where PPO (Proximal Policy Optimization) enters. “Proximal” captures the idea that updates should be small and controlled. PPO-style RLHF typically optimizes an objective that increases reward (or advantage) while penalizing deviation from a reference policy via a KL divergence term. KL divergence is not a true distance, but it is a non-negative measure of mismatch between distributions, equal to zero only when they match.
+
+In practice, PPO often works with advantage rather than raw reward. Advantage can be understood as “reward relative to expectation,” which reduces variance in gradient estimates. PPO commonly introduces a learned value function that predicts expected future reward from partial sequences so that advantage can be computed via generalized advantage estimation. This makes PPO effective but also increases complexity: RLHF with PPO requires the policy model, the reward model, the value model, and a reference policy for KL regularization.
+
+Two variants are often discussed. PPO-Clip controls step-to-step change by clipping a ratio between the new policy and the old policy from the previous RL iteration. PPO-KL introduces an explicit KL penalty to discourage drifting too far from a reference policy (often the SFT model). Modern RLHF systems frequently blend these ideas. The important takeaway is not the exact algebra but the training intent: increase reward, but restrict updates so the model remains stable and anchored.
+
+\section{Best-of-\(N\): using a reward model without RL}
+In many production settings, running a full RLHF loop is expensive and operationally complex. A practical alternative is to keep the SFT model fixed and use the reward model only at inference time.
+
+Best-of-\(N\) does the following. For a given prompt, sample \(N\) candidate completions from the SFT model. Score each completion with the reward model. Return the highest-scoring completion. Conceptually, this uses the reward model as a selector rather than as a training signal.
+
+Best-of-\(N\) can work surprisingly well because the SFT model often produces at least one good answer among several samples, especially with moderate temperature. Its core drawback is cost: it multiplies inference cost by \(N\), and even if candidates are generated in parallel, end-to-end latency often increases because the slowest sample dominates.
+
+\section{DPO: supervised preference tuning without RL}
+Direct Preference Optimization (DPO) addresses the question: can we use preference data to train the policy directly, without training a separate reward model and without on-policy RL?
+
+DPO reframes preference tuning as supervised learning with a specific loss. The loss compares the probability the current policy assigns to the preferred completion against the probability it assigns to the dispreferred completion, while anchoring these probabilities to a reference policy (usually the SFT model). A common DPO form can be written as a logistic objective over a difference of log-probabilities, scaled by a hyperparameter \(\beta\), which plays a role analogous to a KL regularization strength.
+
+The conceptual interpretation is elegant. The “reward” signal is implicitly represented by the model’s own log-probabilities relative to the reference model. This is why DPO is sometimes summarized with the phrase that a language model is “secretly a reward model”: by comparing probabilities of preferred vs dispreferred outputs, the model itself provides the scoring mechanism needed for preference optimization.
+
+DPO has practical advantages. It removes the need to train and maintain a reward model and a value model, reducing the number of moving parts. It also avoids on-policy rollouts, making training more stable and more similar to standard supervised optimization. The trade-off is that DPO can be sensitive to distribution shift: if preference pairs do not match the target use distribution, the model can overfit to the preference dataset. In practice, PPO-style RLHF can still achieve higher peak performance in some settings, but DPO is often attractive when simplicity and stability matter.
+
+\section{What alignment changes—and what it does not}
+Preference tuning typically does not teach new facts. Instead, it changes which among many possible responses the model is likely to produce. This is why alignment is often experienced as improvements in tone, harmlessness, cooperativeness, and style consistency. Two answers can be factually equivalent but differ in how they make a user feel or in whether they violate safety guidelines. Preference tuning pushes probability mass toward the preferred region of response space.
+
+\section{Summary}
+Preference tuning is a third stage that refines an instruction-tuned model by learning what kinds of outputs are preferred over others. The dominant data format is pairwise comparisons because they are easier and more reliable than pointwise scores. RLHF implements preference tuning through a two-stage pipeline: reward modeling (often via Bradley--Terry) and policy optimization (often via PPO variants with KL regularization). Best-of-\(N\) uses the reward model at inference time rather than training time, trading training complexity for inference cost. DPO provides a supervised alternative that directly optimizes preference behavior by comparing policy probabilities relative to a reference model. Together, these methods explain why modern assistants can be shaped not only to be capable, but also to be aligned with human expectations.
+
+\section{Exercises}
+\paragraph{1. Why pairwise?}
+Explain why pairwise preference judgments are often more consistent than pointwise scoring. Give an example where pointwise scoring is ambiguous.
+
+\paragraph{2. Bradley--Terry intuition.}
+In the Bradley--Terry model, what happens to \(P(y_i \succ y_j)\) as \(r_i - r_j \to \infty\)? What if \(r_i = r_j\)?
+
+\paragraph{3. Reward hacking.}
+Provide an example of a proxy reward that can be optimized without achieving the intended goal. Explain why anchoring to a reference model can help.
+
+\paragraph{4. Best-of-\(N\) trade-off.}
+Why can Best-of-\(N\) be attractive operationally? Why is it expensive at inference? How would you decide a reasonable \(N\)?
+
+\paragraph{5. DPO vs RLHF.}
+Describe one reason DPO may be easier to deploy than PPO-style RLHF, and one reason PPO-style RLHF may still outperform DPO in some settings.

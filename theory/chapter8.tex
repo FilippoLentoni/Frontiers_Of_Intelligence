@@ -1,0 +1,86 @@
+% chapters/theory/08.tex
+
+\chapter{Evaluating LLMs and Agentic Systems}
+\label{chap:llm-evaluation}
+
+If we cannot measure an LLM’s performance, we cannot improve it. That statement is obvious in classical machine learning, where models output structured predictions and evaluation is tied to well-defined labels. It becomes much less obvious for LLMs because their outputs are free-form: they can produce natural language, code, multi-step reasoning, tool calls, or multi-turn agent behavior. This chapter builds a practical evaluation toolkit for modern LLM systems. The focus is output quality rather than infrastructure metrics such as uptime or cost, although those matter in real deployments. We start with human evaluation and the problem of rater disagreement, then revisit reference-based rule metrics and why they fail for open-ended language, and finally develop the modern practice of LLM-as-a-judge. We conclude by connecting these ideas to benchmark suites and to evaluation of tool-using agents.
+
+\section{What “evaluation” means in LLM systems}
+Evaluation can mean many things. One can evaluate latency, availability, or price. One can evaluate safety policy compliance. One can evaluate the subjective “quality” of a response. This chapter focuses on the output-quality side: how good is the response the model produced, given a prompt and a target set of criteria such as helpfulness, correctness, relevance, or safety.
+
+The difficulty is that free-form language admits multiple correct answers. A translation can be accurate in many different ways. A summary can be good while phrased differently from a reference. A code solution can be correct even if it differs syntactically. As a result, evaluation design must balance rigor with flexibility.
+
+\section{Human evaluation and inter-rater agreement}
+The ideal evaluation loop is conceptually simple: present a prompt to the model, obtain a response, and ask a human to rate it. If one could do this for every response in production, the system would always have ground truth. In practice this is too expensive, too slow, and not always consistent.
+
+The first problem is subjectivity. Consider a response to “What birthday gift should I get?” A model replies: “A teddy bear is almost always a sweet gift. Just pick one that feels right.” One person might rate this as useful because it provides a plausible suggestion. Another might rate it as unhelpful because it lacks specificity and does not adapt to the recipient’s preferences. These disagreements are not rare; they are typical whenever the criteria are not perfectly objective.
+
+The second problem is that humans disagree even when criteria are intended to be objective. This motivates inter-rater agreement metrics. A naïve metric would measure the proportion of time two raters agree. But agreement alone is misleading because raters can agree by chance, especially when labels are imbalanced.
+
+To see why, suppose raters choose “good” with probabilities \(P_A\) and \(P_B\), independently. The probability that they agree is the probability both say “good” plus the probability both say “bad,” which equals \(P_A P_B + (1-P_A)(1-P_B)\). If both are random with \(P_A = P_B = 0.5\), agreement is already 0.5. If both tend to say “good” most of the time, chance agreement becomes even higher. Therefore raw agreement is difficult to interpret without a baseline.
+
+Chance-corrected measures such as Cohen’s kappa address this by comparing observed agreement to expected agreement under random labeling with the same label marginals. When observed agreement is greater than chance agreement, kappa is positive; if it equals chance, kappa is near zero; if it is worse than chance, it can be negative. Cohen’s kappa applies to two raters; extensions such as Fleiss’ kappa and Krippendorff’s alpha generalize to multiple raters and more complex settings.
+
+In practice, agreement metrics are used as health checks. When agreement is low, teams refine rubrics, run calibration sessions, and clarify criteria. This does not eliminate subjectivity, but it reduces noise and makes human evaluation more trustworthy. Even with improved agreement, the cost and latency of human ratings remain a major bottleneck, so human evaluation is usually used sparingly: for gold sets, audits, and calibration rather than for every iteration.
+
+\section{Reference-based rule metrics and their limits}
+A common compromise is to create a fixed evaluation set. Humans write “reference” answers for a set of prompts once, and then automated metrics compare model outputs to those references. This enables repeated experiments without repeated human labor.
+
+Classic reference-based metrics originated in translation and summarization. METEOR compares predicted and reference text using unigram precision and recall and introduces a penalty for poor word order; BLEU is precision-focused on n-gram overlap with a brevity penalty to prevent trivial short outputs; ROUGE is widely used for summarization with several overlap-based variants. These metrics are useful when the space of valid outputs is narrow and references are reasonably exhaustive.
+
+However, for general LLM evaluation they fail in two ways. First, they penalize stylistic variation. A correct answer can be phrased with different words, different sentence structures, or different levels of detail. Overlap-based metrics tend to score such paraphrases poorly. Second, their correlation with human preference is often weak in open-ended tasks: a response can match the reference closely but still be unhelpful, misleading, or unsafe. As a result, purely rule-based metrics are rarely sufficient for modern assistant evaluation, even when references exist.
+
+\section{LLM-as-a-judge: using a model to evaluate a model}
+The modern idea is to use LLMs themselves as evaluators. Large models encode a great deal of linguistic competence and are often tuned to match human preferences. The resulting approach, commonly called LLM-as-a-judge, treats evaluation as a second LLM call. The judge receives the original prompt, the candidate response, and explicit criteria, and it outputs both a score and an explanation.
+
+This approach has two immediate advantages. It does not require a reference answer for each prompt; the judge can evaluate according to criteria rather than literal overlap. It also produces a rationale, which makes the evaluation more interpretable. An overlap metric yields a number without telling you why it is low; a judge can explain missing facts, incorrect reasoning steps, unsafe content, or verbosity.
+
+A practical detail improves judge reliability: ask for the rationale first, then the score. This tends to yield more consistent judgments because the model externalizes its reasoning before committing. In modern systems, structured output constraints can be applied so that the judge always returns a parseable format (for example, a JSON object with fields \texttt{rationale} and \texttt{score}). Constraining the output format is important because without it, the judge may respond in unpredictable ways.
+
+\subsection{Pointwise and pairwise judging}
+Judging can be done in two common styles. In pointwise judging, the judge evaluates a single response and outputs a score such as pass/fail. In pairwise judging, the judge compares two responses and decides which is better. Pairwise judgments are often easier and more stable, and they are useful beyond evaluation because they can generate preference labels for training reward models or preference-tuning pipelines.
+
+\section{Biases and failure modes of LLM-as-a-judge}
+LLM-as-a-judge is not perfect; it introduces its own biases. Three practical ones are particularly common.
+
+Position bias occurs in pairwise judging when the model prefers the response presented first. A simple mitigation is symmetry: evaluate A vs B and then B vs A, and accept results only when the judgment is consistent or use majority voting across permutations.
+
+Verbosity bias occurs when the judge favors longer responses simply because they contain more words. This can be mitigated by explicitly instructing the judge not to reward length, by providing in-context examples where brevity is correct, or by applying a length-aware adjustment outside the judge.
+
+Self-enhancement bias occurs when a model judges outputs produced by itself and systematically prefers its own style. A practical guideline is to use a different model for judging than for generation, often a stronger model with better reasoning. This does not eliminate shared training-data biases, but it reduces the most direct self-preference effects.
+
+These biases are not exhaustive. A judge can also be misaligned with the target human population, or it can prioritize criteria differently than intended. For this reason, good practice is to calibrate the judge: collect a small set of human ratings, compare judge scores to human scores, and iterate on the judge prompt and rubric until correlation improves.
+
+Reproducibility is also important. Evaluation should be stable across runs; therefore judge calls are typically run at low temperature, such as 0.1 or 0.2, to reduce sampling variance.
+
+\section{Evaluating factuality: decomposing text into checkable claims}
+Some criteria, such as helpfulness or tone, remain partly subjective. Factuality is different: it is often checkable, but not directly at the full-response level. A long answer can contain multiple claims; one incorrect claim should not necessarily label the entire answer as worthless. This motivates a claim-based evaluation pipeline.
+
+A common approach is to decompose the response into a list of atomic facts, evaluate each fact, and then aggregate. For example, a paragraph about the origin of teddy bears might contain claims about dates and historical events. One can use an LLM (or a rule-based extractor) to convert the paragraph into a list of factual statements. Each fact is then checked, often using retrieval: query a knowledge base or the web for evidence, then determine whether the claim is supported. Finally, the overall factuality score is computed as a weighted average of the fact correctness indicators. If all facts are weighted equally, the score reduces to the proportion of correct facts; if some facts are more important, weights can reflect that importance.
+
+This pipeline illustrates a broader principle: for complex criteria, evaluation is often a multi-stage system itself, combining extraction, retrieval, and judgment rather than relying on a single scalar metric.
+
+\section{Benchmarks: what they measure and what they miss}
+Benchmark suites provide standardized, comparable evaluations. They are useful for profiling models, but they are never complete. Most benchmarks fall into a few broad categories.
+
+Knowledge benchmarks test whether the model can reproduce facts across many domains. MMLU is a canonical example: it contains many subjects and uses multiple-choice questions to avoid reliance on open-ended judgment. Multiple-choice framing is not representative of typical usage, but it enables reliable scoring.
+
+Reasoning benchmarks test multi-step inference. AIME evaluates contest math; PIQA evaluates physical commonsense reasoning with two choices. These benchmarks are popular partly because they produce easily scorable answers.
+
+Coding benchmarks test software reasoning. SWE-bench uses real repositories and tests: the model proposes a patch and success is measured by test outcomes. This is particularly relevant because coding ability underpins many agentic tool-use systems.
+
+Safety benchmarks evaluate whether models comply with constraints against harmful behavior. HarmBench is an example, but safety evaluation is tricky because policies differ across providers. Some safety benchmarks require classifiers rather than deterministic scoring, which introduces another source of error.
+
+Agent benchmarks evaluate multi-step tool use. Tau-bench, for instance, defines tool APIs, policies, and tasks in domains like retail and airline support. Evaluation is based on whether the agent achieves the correct state changes in an underlying database. In agent settings, reliability matters: the probability that all runs succeed can be more important than the probability that at least one run succeeds.
+
+Benchmarks should be interpreted with caution. Data contamination is a real risk: if training data contains benchmark items, scores inflate. As models compete, Goodhart’s law applies: when a benchmark becomes a target, it can cease to be a good measure. The most robust evaluation practice combines benchmarks with targeted internal evaluation sets that reflect real user tasks.
+
+\section{Evaluating tool use and agents: where systems fail}
+Agentic systems introduce failure modes beyond “the final answer is wrong.” A useful evaluation mindset is to break an agent step into three stages: selecting the correct tool and arguments, executing the tool, and synthesizing the result into a user response. Each stage can fail in different ways.
+
+A model may fail to call a tool when it should, producing a refusal or vague answer instead. This can happen because a tool router failed to include the tool in context, or because the model was not trained or prompted strongly enough to use tools. A model may hallucinate tools, calling function names that do not exist, often due to weak grounding in the provided schemas or unclear top-level instructions. A model may choose the wrong tool when multiple tools have overlapping scope, which points to either routing errors or ambiguous tool descriptions. Even if the correct tool is selected, arguments can be wrong when necessary context is missing, such as location or account state. At execution time, the tool itself can fail or return unhelpful error strings; structured, meaningful return formats reduce confusion in the synthesis stage. Finally, synthesis can fail if tool output is too verbose, poorly structured, or obscures the key information the model must surface.
+
+This decomposition matters because agent evaluation should not only measure end-to-end success; it should diagnose which stage is responsible for failure. Better debugging and better evaluation are tightly coupled in agentic systems.
+
+\section{Summary}
+Evaluating LLMs requires a blend of methods because outputs are free-form and criteria are diverse. Human evaluation remains the gold standard but is expensive and subject to disagreement; agreement metrics help quantify and improve rating consistency. Reference-based metrics are useful in narrow tasks but often fail under paraphrase and open-ended generation. LLM-as-a-judge has become a practical default for many evaluation workflows because it can score without references and produce rationales, but it introduces biases that must be mitigated and calibrated against human ratings. For factuality, claim-based evaluation pipelines decompose text into checkable statements and aggregate correctness. Benchmarks provide standardized profiles but must be interpreted cautiously due to contamination and Goodhart effects. Finally, agentic systems demand stepwise evaluation: tool choice, argument correctness, tool execution, and response synthesis each introduce distinct failure modes that must be measured and debugged systematically.

@@ -1,0 +1,104 @@
+% chapters/theory/03.tex
+
+\chapter{Large Language Models: Scaling, Mixture-of-Experts, and Generation}
+\label{chap:llms-scaling-moe-generation}
+
+Large Language Models (LLMs) are best understood as a particular point on a trajectory that starts with the Transformer and ends with extremely large, highly optimized, decoder-only language models trained on massive corpora. This chapter introduces the modern meaning of “LLM,” explains how some LLMs scale capacity through mixture-of-experts, and then builds a precise mental model for how text is generated at inference time—how probabilities become tokens, and how tokens become a complete response.
+
+\section{What is a Large Language Model?}
+A large language model is, first, a \emph{language model}: it assigns probability to sequences of tokens by repeatedly estimating the distribution of the next token given the prefix. If the sequence so far is \(x_{1:t}\), the model estimates \(P(x_{t+1}\mid x_{1:t})\). Generation then proceeds by repeatedly choosing a next token and appending it to the sequence until an end-of-sequence condition is reached.
+
+A large language model is, second, \emph{large}. “Large” refers to three independent axes. It refers to model size—often billions of parameters and, in many modern systems, tens or hundreds of billions. It refers to the amount of training data, commonly measured in tokens, frequently in the hundreds of billions and now often in the trillions. Finally, it refers to the compute required to train and serve these models, historically requiring large GPU clusters, with many recent optimizations reducing the barrier for smaller-scale deployment.
+
+A crucial practical clarification is that in contemporary usage, LLMs typically refer to large generative text-to-text models. Encoder-only models such as BERT are large and powerful, but they are not “LLMs” under the narrow modern usage if they are not used as generative language models.
+
+\section{Why decoder-only Transformers dominate LLMs}
+The modern LLM is almost always a decoder-only Transformer. Encoder--decoder Transformers were introduced for translation, and encoder-only Transformers are excellent for building representations for classification. But if the goal is a general-purpose model that produces text, the decoder-only form aligns naturally with the next-token objective and scales cleanly: masked self-attention enforces causality, and the model learns to predict continuation of arbitrary text.
+
+Decoder-only models also benefit from simplicity. Cross-attention disappears because there is no encoder. The model is a stack of repeated blocks containing masked self-attention, a feedforward network, and normalization/residual structure. This uniformity makes it straightforward to scale depth, width, and data.
+
+\section{Mixture-of-Experts: scaling capacity without activating everything}
+Modern models are large enough that a natural question emerges: do we need to activate all parameters for every token? A dense Transformer does exactly that. In mixture-of-experts (MoE), the model is reorganized so that multiple “expert” sub-networks exist, and a routing mechanism chooses which experts to activate for each input. The goal is to increase the model’s total capacity while controlling inference compute.
+
+The motivating analogy is simple. If you enter a room with a mathematician, a physicist, a chemist, and a historian, and you have a math question, it is unnecessary to ask everyone to answer. In dense networks we “ask everyone” by default; in MoE networks we attempt to ask only the most relevant experts.
+
+\subsection{Dense MoE vs sparse MoE}
+In a generic MoE layer, the model produces an output as a weighted sum of expert outputs. If the input is \(x\), experts are \(E_i(\cdot)\), and a gating network is \(G(\cdot)\), then one can write
+\[
+\hat{y}(x) = \sum_{i=1}^n G_i(x)\,E_i(x).
+\]
+If every expert is evaluated, the compute cost remains high, even if many weights \(G_i(x)\) are small. This is often described as a dense MoE.
+
+Sparse MoE introduces a constraint: only the top-\(k\) experts are activated, typically \(k=1\) or \(k=2\). In that case,
+\[
+\hat{y}(x) = \sum_{i\in \mathrm{TopK}(G(x))} G_i(x)\,E_i(x),
+\]
+and only those selected experts are computed. The central benefit is reduced compute for each forward pass while allowing the model to have a large number of total parameters.
+
+\subsection{FLOPs: a language for compute}
+When discussing compute cost, it is common to use FLOPs—floating-point operations—as a measure of how many arithmetic operations a forward pass requires. In sparse MoE, the total parameter count increases as the number of experts increases, but the number of \emph{active} parameters per token can remain controlled. This makes MoE attractive when one wants capacity without paying the full dense cost at inference.
+
+\subsection{Where experts live in LLMs}
+In decoder-only Transformers, the feedforward network (FFN) typically dominates parameter count within a block. The FFN maps from \(d_{\text{model}}\) to a larger hidden dimension \(d_{\text{ff}}\) and back to \(d_{\text{model}}\). Because \(d_{\text{ff}}\) is often several times larger than \(d_{\text{model}}\), the FFN contains a large fraction of the block’s parameters. For this reason, most LLM MoE designs place experts in the FFN: each expert is a separate feedforward network, and the router selects which expert processes each token.
+
+Routing is performed at the token level. Different tokens in the same sequence can be routed to different experts. This is important both for modeling and for systems design: experts can be distributed across hardware, and the routing pattern determines how compute is scheduled.
+
+\subsection{Training challenge: routing collapse}
+A key training failure mode is routing collapse: the router learns to send most tokens to a small subset of experts, leaving other experts underutilized. When this happens, the model fails to benefit from the additional capacity and can become brittle.
+
+A standard mitigation is to add a load-balancing term to the loss that encourages more uniform utilization. Conceptually, one monitors how many tokens each expert receives (a fraction \(f_i\)) and the average routing probability assigned to each expert (a quantity \(p_i\)), and one adds an auxiliary objective that discourages extreme imbalance. Another common trick is noisy gating, where noise is injected into routing logits so that exploration of experts continues during training.
+
+\section{From logits to tokens: how an LLM generates}
+At inference time, an LLM produces a distribution over the vocabulary at each step, and the system must choose a next token. This choice is not a minor detail; it determines determinism, diversity, and often overall perceived quality.
+
+\subsection{Softmax and temperature}
+At each step \(t\), the model produces logits \(z_t \in \mathbb{R}^{|V|}\) over the vocabulary. Softmax converts logits into probabilities. A commonly used temperature parameter \(T>0\) modifies this distribution:
+\[
+P(x_{t+1}=v \mid x_{1:t}) = \frac{\exp(z_{t,v}/T)}{\sum_{u\in V}\exp(z_{t,u}/T)}.
+\]
+Temperature controls how sharp the distribution is. Small \(T\) makes the distribution spiky, concentrating probability mass on the highest-logit tokens. Large \(T\) flattens the distribution, increasing randomness and the chance of sampling lower-probability tokens.
+
+In the limit, as \(T\to 0\), the distribution approaches a point mass at the argmax token. As \(T\to\infty\), the distribution approaches uniform. In practice, \(T\) is a knob controlling the diversity–determinism trade-off.
+
+\subsection{Greedy decoding}
+The simplest decoding strategy is greedy decoding: always choose the token with maximum probability. If the model is deterministic, greedy decoding produces the same output for the same prompt every time. This is often undesirable for chat assistants because it removes diversity.
+
+Greedy decoding is also only locally optimal. Choosing the highest-probability next token does not guarantee the highest-probability full sequence, because an early locally optimal choice can lead to low-probability continuations later.
+
+\subsection{Beam search}
+Beam search addresses the “local vs global” issue by maintaining multiple candidate continuations. At each step, it expands each candidate by possible next tokens and retains the top \(k\) partial sequences (the beam width). Sequences are commonly scored by the sum of log probabilities:
+\[
+\log P(x_{1:T}) = \sum_{t=1}^T \log P(x_t\mid x_{<t}).
+\]
+Because multiplying probabilities less than one shrinks quickly with length, beam search includes length normalization or penalties to avoid systematically preferring short outputs.
+
+Beam search is widely used in tasks like translation, where a high-likelihood output is the goal. For open-ended dialogue, it is less common because it can reduce diversity and can be computationally heavy.
+
+\subsection{Sampling-based methods}
+Sampling chooses the next token by drawing from the probability distribution rather than taking the argmax. This introduces diversity and can produce more creative outputs. However, sampling naïvely from the full distribution can occasionally produce low-probability tokens that are undesirable.
+
+Two widely used restrictions are top-\(k\) and top-\(p\) (nucleus) sampling. Top-\(k\) sampling keeps only the \(k\) most probable tokens and samples from them. Top-\(p\) sampling keeps the smallest set of tokens whose cumulative probability exceeds a threshold \(p\), then samples from that set. These strategies preserve diversity while reducing the chance of sampling extremely unlikely tokens.
+
+\section{Guided decoding and structured output constraints}
+Many applications require outputs in a strict format—JSON, code with a specific schema, or tool-call arguments that must be valid. A naïve strategy is to ask the model for the format and retry if parsing fails. A more robust approach is guided decoding, where the decoder is constrained to only produce tokens that keep the output valid under a grammar.
+
+Guided decoding can be implemented using finite-state machines or context-free grammars. The core idea is to filter invalid next tokens during generation. When multiple tokens remain valid, the model’s probabilities still determine which token is sampled. This approach enforces structural correctness without relying on post-hoc retries.
+
+\section{Putting it together}
+The modern LLM is a decoder-only Transformer trained to predict the next token. Inference turns probabilities into tokens via decoding strategies. Mixture-of-experts increases capacity by routing tokens through specialized feedforward networks rather than activating the full dense model at every step. Together these ideas explain why LLMs can be simultaneously powerful, scalable, and configurable: architecture and training provide broad capability, while routing and decoding choices determine efficiency, diversity, and controllability.
+
+\section{Exercises}
+\paragraph{1. Temperature reasoning.}
+Using the definition of temperature-scaled softmax, explain why lowering \(T\) makes the distribution spikier. What happens in the limits \(T\to 0\) and \(T\to \infty\)?
+
+\paragraph{2. Local vs global decoding.}
+Construct a toy example of a two-step sequence where greedy decoding chooses a higher-probability first token but yields a lower-probability full sequence than an alternative path. Explain how beam search avoids this pitfall.
+
+\paragraph{3. MoE capacity vs compute.}
+Explain the difference between total parameters and active parameters in sparse MoE. Why can an MoE model have far more parameters than a dense model without proportionally increasing inference FLOPs?
+
+\paragraph{4. Routing collapse.}
+Describe routing collapse in sparse MoE. What kinds of auxiliary objectives or tricks can encourage more uniform expert usage?
+
+\paragraph{5. Guided decoding.}
+Give an example of a structured output requirement (e.g., JSON). Describe how constraining valid next tokens differs from retrying after invalid output.

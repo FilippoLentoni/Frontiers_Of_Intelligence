@@ -1,6 +1,6 @@
-# My Book
+# Frontiers of Intelligence
 
-A LaTeX book project with seven starter chapters.
+A LaTeX book project with theory and applications chapters.
 
 ## Compile
 

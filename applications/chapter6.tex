@@ -1,0 +1,359 @@
+% Define colours for code listings
+\definecolor{keyword}{RGB}{0,0,128}
+\definecolor{comment}{RGB}{0,96,0}
+\definecolor{string}{RGB}{128,0,0}
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{keyword}\bfseries,
+  commentstyle=\color{comment}\itshape,
+  stringstyle=\color{string},
+  showstringspaces=false,
+  frame=single,
+  framerule=0.5pt,
+  numbers=left,
+  numberstyle=\tiny,
+  numbersep=5pt
+}
+
+\chapter{Lab 6: Building the Customer‑Facing Frontend}
+\label{chap:Lab 6: Building the Customer‑Facing Frontend}
+
+\section{Introduction and Objectives}
+
+With your customer‑support agent now deployed to a production runtime
+and continuously evaluated for quality, the final piece of the
+workshop is to provide a \emph{customer interface}.  Lab 6 guides you
+through building a Streamlit web application that allows end users to
+chat with your agent in a secure, user‑friendly environment.  Key
+features of the frontend include:
+
+\begin{itemize}
+  \item \textbf{Secure Authentication} – Users log in via Amazon Cognito,
+        ensuring that only authorised customers can access the agent.
+  \item \textbf{Real‑time Chat Interface} – A conversational UI built
+        with Streamlit that resembles a modern messaging application.
+  \item \textbf{Streaming Responses} – Live response streaming for
+        improved user experience; messages appear as they are
+        generated rather than waiting for the full answer.
+  \item \textbf{Session Management} – The frontend passes
+        session IDs to AgentCore Runtime and maintains conversation
+        history between page refreshes, leveraging the memory
+        introduced in Lab 2.
+  \item \textbf{Performance Metrics} – Each response displays a timing
+        indicator so customers see how quickly the agent handled their
+        query.
+\end{itemize}
+
+By the end of this lab you will have:
+
+\begin{itemize}
+  \item Deployed a Streamlit application connected to your AgentCore
+        Runtime endpoint.
+  \item Integrated Cognito authentication into the frontend.
+  \item Implemented real‑time streaming of agent responses.
+  \item Completed a fully self‑contained customer support solution
+        spanning prototype through production.
+\end{itemize}
+
+\section{Prerequisites}
+
+Before beginning the lab make sure you meet the following conditions:
+
+\begin{itemize}
+  \item \textbf{Completed Labs 1–4.}  You need a deployed AgentCore
+        Runtime endpoint and a configured Cognito user pool from
+        earlier labs.
+  \item \textbf{Python 3.10 or higher} installed on your machine.
+  \item \textbf{Streamlit dependencies.}  The lab installs these via
+        the provided requirements file.
+  \item \textbf{AgentCore Runtime ARN and Cognito credentials.}
+        Ensure you know the ARN of the runtime and have test user
+        credentials for Cognito authentication.
+\end{itemize}
+
+\section{Installing Frontend Dependencies}
+
+The first step is to install the packages needed by the Streamlit
+frontend.  These include Streamlit itself, the Cognito
+authentication library and helper modules for interacting with AgentCore.
+Run the following command from the root of the workshop repository:
+
+\begin{lstlisting}[language=bash]
+pip install -r lab_helpers/lab5_frontend/requirements.txt -q
+echo "✅ Frontend dependencies installed successfully!"
+\end{lstlisting}
+
+This command reads the \texttt{requirements.txt} file in the
+\texttt{lab\_helpers/lab5\_frontend} directory and installs all necessary
+packages, suppressing verbose output for a cleaner notebook.
+
+\section{Frontend Architecture}
+
+The Streamlit application is split into a few key files.  Each file
+encapsulates a distinct responsibility in the frontend and allows
+you to customise or extend the interface without touching the core
+agent logic.
+
+\subsection{Core Components}
+
+\begin{description}
+  \item[\texttt{main.py}] This is the entry point for the Streamlit app.  It
+    handles user authentication using a \texttt{CognitoAuthenticator},
+    displays the chat interface, maintains session state and
+    orchestrates streaming of responses.  After the user logs in,
+    \texttt{main.py} creates a \texttt{ChatManager} instance to
+    communicate with AgentCore Runtime and renders each message in the
+    conversation.
+
+  \item[\texttt{chat.py}] Implements the \texttt{ChatManager} class and
+    functions for invoking the AgentCore Runtime.  It offers both
+    streaming and non‑streaming invocation methods.  The streaming
+    variant uses the HTTP \texttt{text/event-stream} mechanism to
+    yield partial results as the model generates them.
+
+  \item[\texttt{chat\_utils.py}] Provides helper functions for reading and
+    writing configuration from Systems Manager Parameter Store,
+    converting plain text into clickable links, reading YAML/JSON
+    configuration files and creating safe HTML for Streamlit.
+
+  \item[\texttt{sagemaker\_helper.py}] Supplies a helper function to retrieve
+    the URL of a SageMaker Studio Lab environment.  If the code is not
+    running in SageMaker, it falls back to \texttt{localhost:8501}.
+\end{description}
+
+\subsection{Understanding \texttt{main.py}}
+
+The heart of the frontend is the \texttt{main.py} script.  It begins
+by loading a JSON secret from a local helper function and instantiating
+a \texttt{CognitoAuthenticator}.  The authenticator prompts the user
+for their username and password; if authentication fails the
+application halts.
+
+\begin{lstlisting}
+import json
+import os
+import sys
+import time
+import uuid
+
+import streamlit as st
+from chat import ChatManager, invoke_endpoint_streaming
+from chat_utils import make_urls_clickable
+from streamlit_cognito_auth import CognitoAuthenticator
+
+from utils import get_customer_support_secret
+
+secret = json.loads(get_customer_support_secret())
+
+authenticator = CognitoAuthenticator(
+    pool_id=secret["pool_id"],
+    app_client_id=secret["client_id"],
+    app_client_secret=secret["client_secret"],
+    use_cookies=False,
+)
+
+is_logged_in = authenticator.login()
+if not is_logged_in:
+    st.stop()
+
+# Once authenticated, display the app title and set up sidebar
+st.title("Customer Support Agent")
+with st.sidebar:
+    st.text(f"Welcome,\n{authenticator.get_username()}")
+    st.button("Logout", on_click=authenticator.logout)
+
+\end{lstlisting}
+
+After successful login, the script initialises a \texttt{ChatManager}
+and session state variables.  Streamlit’s session state persists
+across page reloads, enabling conversation history and session
+identification.  Each time the user submits a prompt, \texttt{main.py}
+appends it to the session message list and then streams the
+assistant’s response.  The following code excerpt shows how a
+user message is processed:
+
+\begin{lstlisting}
+# Accept user input
+if prompt := st.chat_input("What is up?"):
+    # Display user message
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    # Add user message to history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    # Build a conversation context window
+    context = "".join(
+        f"{msg['role'].capitalize()}: {msg['content']}\n"
+        for msg in st.session_state.messages[-20:]
+    )
+    # Retrieve the bearer token for the logged‑in user
+    bearer_token = st.session_state.get("auth_access_token")
+    # Stream the response
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        start_time = time.time()
+        accumulated = ""
+        for chunk in invoke_endpoint_streaming(
+            agent_arn=st.session_state["agent_arn"],
+            payload=json.dumps({"prompt": context}),
+            session_id=st.session_state["session_id"],
+            bearer_token=bearer_token,
+        ):
+            accumulated += chunk
+            clickable = make_urls_clickable(accumulated)
+            message_placeholder.markdown(
+                f"<div class='assistant-bubble streaming'> {clickable}</div>",
+                unsafe_allow_html=True,
+            )
+        elapsed = time.time() - start_time
+        # Final response rendering with timing
+        message_placeholder.markdown(
+            f"<div class='assistant-bubble'> {clickable}<br><span style='font-size:0.9em;color:#888;'>⏱️ Response time: {elapsed:.2f} seconds</span></div>",
+            unsafe_allow_html=True,
+        )
+        # Persist assistant response in session history
+        st.session_state.messages.append({"role": "assistant", "content": accumulated, "elapsed": elapsed})
+
+\end{lstlisting}
+
+This pattern demonstrates how the application accumulates chunks from
+the streaming invocation, updates the placeholder to show partial
+results and records the full answer along with response timing.
+
+\subsection{Streaming Invocation with \texttt{chat.py}}
+
+The \texttt{invoke\_endpoint\_streaming} function defined in
+\texttt{chat.py} sends an HTTP POST request to AgentCore Runtime with
+appropriate headers and yields chunks of the streaming response.  A
+bare‑bones version is shown below:
+
+\begin{lstlisting}
+import json
+import urllib.parse
+import requests
+
+def invoke_endpoint_streaming(agent_arn: str, payload: str, session_id: str, bearer_token: str, endpoint_name: str = "DEFAULT"):
+    # Escape ARN and build URL
+    escaped_arn = urllib.parse.quote(agent_arn, safe="")
+    url = f"https://bedrock-agentcore.{st.session_state['region']}.amazonaws.com/runtimes/{escaped_arn}/invocations"
+    # Build headers including the JWT token and session ID
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Content-Type": "application/json",
+        "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id,
+    }
+    # Parse payload and make streaming request
+    body = json.loads(payload) if isinstance(payload, str) else payload
+    response = requests.post(url, headers=headers, params={"qualifier": endpoint_name}, json=body, stream=True, timeout=100)
+    response.raise_for_status()
+    # Yield each chunk prefixed with 'data: '
+    for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+        if line and line.startswith("data: "):
+            chunk = line[6:]  # Remove prefix
+            if chunk.strip():
+                yield chunk
+
+\end{lstlisting}
+
+This function abstracts away the details of streaming and allows
+\texttt{main.py} to focus on user interface concerns.  A similar
+\texttt{invoke\_endpoint\_nostreaming} method is available for
+synchronous requests.
+
+\section{Launching the Application}
+
+Once you understand the architecture, you can start the frontend and
+connect it to your runtime.  The following commands (also found in
+the notebook) first retrieve an accessible URL for the application and
+then launch the Streamlit server:
+
+\begin{lstlisting}
+from lab_helpers.lab5_frontend.sagemaker_helper import get_streamlit_url
+
+streamlit_url = get_streamlit_url()
+print(f"\n Customer Support Streamlit Application URL:\n{streamlit_url}\n")
+
+# Start the application.  This runs until you interrupt it (Ctrl+C).
+!cd lab_helpers/lab5_frontend/ && streamlit run main.py
+\end{lstlisting}
+
+If you are running inside SageMaker Studio Lab, the helper extracts the
+domain ID and space name from the environment and constructs a
+publicly accessible URL.  Otherwise it falls back to
+\texttt{http://localhost:8501}.  When the command completes, open
+the provided URL in your browser and log in using your Cognito
+credentials.
+
+\section{Testing the Customer Support Application}
+
+With the frontend running, you can simulate real customer sessions.
+After logging in, you should see a welcome message followed by a chat
+prompt.  Try the following scenarios:
+
+\begin{enumerate}
+  \item \textbf{Product Information Queries} – Ask about the
+    specifications of your company’s products (e.g. “What are the
+    specifications for your laptops?”).  The agent should call the
+    product information tool and respond with the appropriate details.
+
+  \item \textbf{Return Policy Questions} – Ask about the return policy
+    for various product categories (e.g. “What’s the return policy for
+    electronics?”).  The agent should use the return‑policy tool.
+
+  \item \textbf{Troubleshooting Support} – Describe a technical
+    problem (e.g. “My iPhone is overheating, what should I do?”).  This
+    triggers the technical‑support tool, which queries the knowledge
+    base and returns step‑by‑step instructions.
+
+  \item \textbf{Memory and Personalisation} – Conduct a multi‑turn
+    conversation, refresh the page and then continue speaking.  The
+    agent should remember your prior preferences and queries thanks to
+    the memory service from Lab 2.
+\end{enumerate}
+
+As you test, pay attention to:
+
+\begin{itemize}
+  \item \textbf{Real‑time Streaming} – Responses should arrive
+        incrementally with a typing animation.
+  \item \textbf{Response Timing} – A stopwatch icon displays how long
+        each response took to generate.
+  \item \textbf{Tool Integration} – Check that the agent selects the
+        correct tools for different query types.
+  \item \textbf{Memory Persistence} – Verify that conversation
+        context persists across browser refreshes and logins.
+  \item \textbf{Error Handling} – Observe how the interface responds
+        if the agent encounters an error; appropriate messages should
+        be displayed rather than raw tracebacks.
+\end{itemize}
+
+\section{Summary and Next Steps}
+
+In this lab you built and tested a customer‑facing Streamlit web
+application that integrates securely with your AgentCore Runtime.  You
+learned how to:
+
+\begin{itemize}
+  \item Install Streamlit and helper dependencies.
+  \item Authenticate users via Cognito and manage JWT tokens in the
+        frontend.
+  \item Stream responses from AgentCore Runtime and present them in
+        an interactive chat interface with response timing.
+  \item Maintain session state and conversation history using
+        Streamlit’s session object.
+  \item Test various customer support scenarios and verify that the
+        agent uses the right tools while remembering prior context.
+\end{itemize}
+
+With Lab 6 complete, you now have a full end‑to‑end solution: a
+customer‑support agent defined in Lab 1, enriched with memory in
+Lab 2, scaled via Gateway and identity in Lab 3, deployed to a
+production runtime in Lab 4, continuously evaluated in Lab 5 and
+presented to customers through a polished web interface in Lab 6.
+
+Future enhancements might include custom styling, integration with
+existing CRM systems, multi‑language support or a mobile‑friendly
+layout.  The modular architecture of the frontend makes these
+improvements straightforward to implement.
+
+\end{document}
