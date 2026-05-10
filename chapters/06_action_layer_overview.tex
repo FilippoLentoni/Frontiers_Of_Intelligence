@@ -1,0 +1,105 @@
+\chapter{The Action Layer}
+
+The action layer turns model decisions into interactions with external systems. A model can suggest an action, but an action layer executes it, validates it, records it, and returns an observation.
+
+A common oversimplification is to say that tools are deterministic. Many tools are deterministic, but not all. A calculator is deterministic. A database lookup should be deterministic for a fixed state. A web search is partly stochastic because ranking changes, pages change, and snippets vary. A code-generation sub-agent is stochastic. An ``agent as a tool'' may perform its own multi-step reasoning loop before returning an answer.
+
+The action layer therefore should not be defined as ``deterministic functions.'' It should be defined as \emph{typed external capabilities with explicit invocation boundaries}. Some capabilities produce deterministic outputs; others produce probabilistic. All of them need schemas, permissions, observability, and error handling.
+
+\section{Model-controlled, application-controlled, and user-controlled capabilities}
+
+Not every external capability should be controlled by the model.
+
+\begin{description}[leftmargin=*]
+  \item[Model-controlled.] The model may decide to call the tool. Example: search the knowledge base, run a safe calculation, inspect a file.
+  \item[Application-controlled.] The application decides when to provide a resource or execute a workflow. Example: automatically insert user profile context, enforce a policy check before every payment.
+  \item[User-controlled.] The user explicitly selects a prompt, workflow, or action. Example: ``summarize this document,'' ``run deployment,'' or ``send this email now.''
+\end{description}
+
+Good architecture does not give the model unnecessary freedom. The model should control low-risk, information-gathering actions. The application should control policy and security. The user should control irreversible or preference-sensitive actions.
+
+\section{Action schemas as behavioral control}
+
+Tool schemas are not only API descriptions. They are behavioral controls. A clear schema teaches the model what action exists, when it should be used, and what arguments are valid.
+
+A good schema includes:
+
+\begin{itemize}[leftmargin=*]
+  \item a short, unambiguous name;
+  \item a description that says when to use and when not to use the tool;
+  \item typed arguments with constraints;
+  \item examples of valid inputs when helpful;
+  \item a structured output format;
+  \item explicit error codes;
+  \item safety notes for destructive actions.
+\end{itemize}
+
+Bad schemas create hallucinated actions. If two tools have overlapping descriptions, the model may choose arbitrarily. If argument names are vague, the model may fill them incorrectly. If outputs are verbose, the model may miss the important field.
+
+\section{Stochastic tools and agent-as-tool}
+
+A stochastic tool returns outputs that may vary across calls. This matters because the caller cannot assume idempotent behavior. Search results change. A ranking model may reorder candidates. A sub-agent may choose a different path. Even a tool backed by another LLM is a tool from the caller's perspective.
+
+An agent-as-tool pattern is useful when a subtask is complex enough to deserve its own loop. For example:
+
+\begin{itemize}[leftmargin=*]
+  \item a research agent that searches sources and returns a cited briefing;
+  \item a code-review agent that inspects a patch and returns risks;
+  \item a database agent that translates natural language into safe read-only SQL and summarizes results;
+  \item a planner agent that decomposes a broad request into tasks for the main agent.
+\end{itemize}
+
+However, agent-as-tool increases opacity. The parent agent sees only the returned observation unless the sub-agent exposes traces. The system should therefore record nested traces, propagate budgets, and define a clear output contract. Otherwise stochastic delegation becomes an uncontrolled black box.
+
+\section{Idempotency, reversibility, and side effects}
+
+Actions can be classified by side effect.
+
+\begin{description}[leftmargin=*]
+  \item[Read-only.] Search, retrieve, inspect, list, calculate. These are usually safe to call autonomously, though privacy still matters.
+  \item[Reversible write.] Draft email, create ticket, save note, stage file change. These are safer if the user can review or undo.
+  \item[Irreversible or consequential write.] Send payment, delete data, submit tax form, deploy production code. These require stronger approval and audit.
+\end{description}
+
+Idempotency is also important. If a tool is called twice, does it create duplicate tickets or simply return the same result? Production tools should use idempotency keys for operations where repeated calls would cause duplicate side effects.
+
+\section{Tool result design}
+
+Tool outputs should be compact, structured, and decision-relevant. A model does not need a full database object if the user asked whether an order has shipped. It needs the status, date, carrier, tracking number, and uncertainty if any.
+
+A strong pattern is to return both machine-readable fields and a short human-readable summary:
+
+\begin{lstlisting}[language=json]
+{
+  "status": "shipped",
+  "tracking_number": "1Z...",
+  "estimated_delivery": "2026-05-06",
+  "confidence": 0.98,
+  "summary": "The order shipped yesterday and is expected on May 6."
+}
+\end{lstlisting}
+
+The model can use the structured fields to reason and the summary to respond. The trace can store both.
+
+\section{Errors are part of the contract}
+
+Every tool should document possible errors. A vague error like ``failed'' is not enough. The model needs to know whether to retry, ask the user, escalate, or stop.
+
+Useful error categories include:
+
+\begin{itemize}[leftmargin=*]
+  \item missing required argument;
+  \item invalid argument format;
+  \item unauthorized;
+  \item resource not found;
+  \item rate limited;
+  \item service unavailable;
+  \item unsafe action blocked;
+  \item ambiguous result.
+\end{itemize}
+
+For stochastic tools and agent-as-tool, the output should also include confidence or evidence. If a research sub-agent returns a conclusion, it should include sources and uncertainty. If a coding sub-agent returns a patch, it should include tests run and tests not run.
+
+\section{Summary}
+
+The action layer exposes external capabilities through typed invocation boundaries. Tools may be deterministic, stochastic, human-mediated, or full agents. The architecture must treat every tool as a contract: schema, permissions, side effects, output shape, errors, budget, and observability. The detailed application of this layer appears in the LangGraph chapter in the applications section, where tools and sub-agents become graph nodes and callable capabilities.

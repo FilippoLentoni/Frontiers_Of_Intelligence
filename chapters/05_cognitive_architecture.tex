@@ -1,0 +1,82 @@
+\chapter[Cognitive Architecture]{Cognitive Architecture}
+
+The intelligence layer needs a cognitive architecture: a way to organize model decisions over time. In early systems, the architecture was often hidden inside one long prompt. In production systems, it should be explicit. The cognitive architecture decides which model to use, how much reasoning to allocate, whether to retrieve or act, whether to ask for clarification, and when to stop.
+
+This chapter intentionally does not treat skills, prompt engineering, and context engineering as core subsections of the cognitive architecture. Those are moved to the memory and knowledge layer because they are mechanisms for packaging and delivering knowledge to the model. Here we focus on decision control.
+
+\section{The basic agent loop}
+
+A minimal cognitive loop is:
+
+\begin{enumerate}[leftmargin=*]
+  \item read the current state;
+  \item infer the user's goal and constraints;
+  \item decide whether enough information is available;
+  \item choose the next action: answer, retrieve, call a tool, delegate, ask, or stop;
+  \item interpret the observation;
+  \item update state and repeat.
+\end{enumerate}
+
+This loop is simple to describe but hard to make reliable. The model must distinguish missing information from inconvenient information. It must not confuse its own hypothesis with a tool observation. It must notice when the task has already been completed. It must avoid taking actions outside the permissions granted to it.
+
+\section{Deliberation budgets}
+
+Reasoning is a resource. A good cognitive architecture assigns a deliberation budget to the task. The budget can affect model choice, maximum output tokens, number of tool iterations, number of retrieval rounds, and whether the system uses self-checking.
+
+The budget should be visible in the trace. If a simple request triggers a high-budget loop, that is a cost bug. If a complex request is routed through a low-budget model, that is a quality bug.
+
+\section{State and belief}
+
+An agent needs state. State may include user input, messages, retrieved documents, tool outputs, current plan, completed steps, unresolved questions, costs, and safety decisions. Some state is factual: a tool returned a database record. Some state is a belief: the model suspects that a test failure is caused by a dependency mismatch.
+
+The architecture should separate observations from beliefs. A useful pattern is to store:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{observations}: raw outputs from tools, retrieval, users, and validators;
+  \item \textbf{hypotheses}: model-generated explanations or candidate plans;
+  \item \textbf{decisions}: selected actions and why they were selected;
+  \item \textbf{commitments}: facts that the final answer is allowed to rely on.
+\end{itemize}
+
+This separation reduces hallucination. The final response should be grounded in observations and commitments, not only in hypotheses.
+
+\section{Clarification versus autonomy}
+
+A central cognitive decision is whether to ask the user or continue autonomously. Asking too often makes the agent annoying. Acting without enough information creates errors. The decision should depend on risk and recoverability.
+
+Ask for clarification when:
+
+\begin{itemize}[leftmargin=*]
+  \item required parameters are missing;
+  \item multiple interpretations lead to different actions;
+  \item the action is irreversible;
+  \item the cost of a wrong action is high;
+  \item permissions are unclear.
+\end{itemize}
+
+Continue autonomously when:
+
+\begin{itemize}[leftmargin=*]
+  \item the next step is low risk;
+  \item the agent can verify the result;
+  \item the operation is reversible;
+  \item the user has explicitly delegated the task;
+  \item missing information can be retrieved safely.
+\end{itemize}
+
+\section{Stopping conditions}
+
+An agent without a stop condition becomes a loop. Stop conditions can be success-based, budget-based, safety-based, or uncertainty-based.
+
+\begin{description}[leftmargin=*]
+  \item[Success-based.] The required artifact has been produced, the test passes, or the requested fact has been retrieved.
+  \item[Budget-based.] The agent has exhausted tool calls, time, tokens, or dollar budget.
+  \item[Safety-based.] The next action requires permission that the user or policy has not granted.
+  \item[Uncertainty-based.] The agent cannot reduce uncertainty without asking a human or user.
+\end{description}
+
+Stopping is as important as planning. Many agents fail by continuing to search after sufficient evidence exists, or by attempting another code edit after tests already pass.
+
+\section{Summary}
+
+The cognitive architecture controls how the model behaves over time. It routes among models, allocates reasoning budgets, separates observations from hypotheses, decides when to clarify, and enforces stopping conditions. Prompt and skill content are covered in the knowledge layer; the cognitive architecture decides how and when that content is used.

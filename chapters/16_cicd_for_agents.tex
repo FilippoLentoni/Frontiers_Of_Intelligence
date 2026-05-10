@@ -1,0 +1,94 @@
+\chapter{CI/CD for Agents}
+
+Traditional CI/CD tests code. Agent CI/CD must test code, prompts, tools, model choices, retrieval indexes, memory behavior, and evaluation scores. An agent deployment can regress even if the application code does not change, because the model version, prompt, tool schema, dataset, or retrieval corpus changed.
+
+\section{What must be versioned}
+
+Version the following artifacts:
+
+\begin{itemize}[leftmargin=*]
+  \item graph code;
+  \item tool implementations;
+  \item tool schemas;
+  \item system prompts;
+  \item skills and procedural memory;
+  \item output schemas;
+  \item retrieval indexes and chunking strategy;
+  \item memory extraction policy;
+  \item model names and parameters;
+  \item evaluation datasets;
+  \item judge prompts and rubrics;
+  \item deployment configuration.
+\end{itemize}
+
+If an artifact can change agent behavior, it needs a version.
+
+\section{Test layers}
+
+Agent CI/CD should include multiple test layers.
+
+\begin{description}[leftmargin=*]
+  \item[Unit tests.] Tool functions, validators, parsers, schema checks.
+  \item[Node tests.] Individual LangGraph nodes with mocked state and tool outputs.
+  \item[Trajectory tests.] Multi-step workflows with expected tool calls and state transitions.
+  \item[Golden datasets.] Stable prompts with expected behavior and scoring rubrics.
+  \item[Regression tests.] Production failures converted into dataset items.
+  \item[Security tests.] Prompt injection, unauthorized access, data exfiltration, approval bypass.
+  \item[Cost tests.] Token and tool-call budgets.
+\end{description}
+
+\section{Evaluation gates}
+
+A deployment should pass quality gates before release. Example gates:
+
+\begin{itemize}[leftmargin=*]
+  \item goal success above threshold;
+  \item no critical safety failures;
+  \item tool-call accuracy above threshold;
+  \item no unsupported citation claims in factual tasks;
+  \item latency below target percentile;
+  \item cost per successful task below budget;
+  \item no regression on high-priority customer cases.
+\end{itemize}
+
+The thresholds should be task-specific. A creative writing assistant and a tax filing agent should not share the same gate.
+
+\section{Canary deployment}
+
+Agent changes should often be canaried. Send a small percentage of traffic to the new version, compare quality and cost, then gradually expand. Canary analysis should include human review for high-risk domains.
+
+Version traces by deployment version. If the new version fails, rollback should restore not only code but also prompts, model routing, retrieval index, and tool schemas.
+
+\section{Rollback}
+
+Rollback is harder for agents than for ordinary software because state may have changed. A rollback plan should answer:
+
+\begin{itemize}[leftmargin=*]
+  \item Can we revert prompt and graph versions?
+  \item Can we revert tool schemas without breaking clients?
+  \item Can we restore a previous retrieval index?
+  \item What happens to memories written by the failed version?
+  \item Were any external actions taken that need remediation?
+\end{itemize}
+
+For high-risk actions, rollback may require compensating actions, not just code reversion.
+
+\section{Release notes for agents}
+
+Agent release notes should include:
+
+\begin{itemize}[leftmargin=*]
+  \item changed prompts or skills;
+  \item changed tools or permissions;
+  \item model changes;
+  \item evaluation results;
+  \item known limitations;
+  \item expected behavior changes;
+  \item rollback instructions.
+\end{itemize}
+
+This creates accountability and helps downstream teams understand behavior changes.
+
+\section{Summary}
+
+CI/CD for agents extends software deployment with prompt versioning, tool schema tests, retrieval evaluation, trajectory tests, safety checks, and cost gates. The deployment unit is not code alone; it is the full behavior-producing system.

@@ -1,0 +1,87 @@
+\chapter{Training, Alignment, and Reasoning}
+
+Modern agentic capability is produced by a sequence of training and post-training stages. Pretraining gives the model broad language and code competence. Supervised fine-tuning teaches it to respond like an assistant. Preference tuning shapes style, helpfulness, and safety. Reasoning optimization teaches the model to spend computation on hard tasks. Tool-use and agentic training teach it to interact with external systems. This chapter connects those stages to the agent behaviors we care about in production.
+
+\section{Pretraining: learning the statistical structure of text and code}
+
+Pretraining usually optimizes next-token prediction. Given tokens $x_1, \ldots, x_t$, the model estimates $P(x_{t+1} \mid x_1, \ldots, x_t)$. This objective is simple, but at scale it teaches the model syntax, facts, programming patterns, document structures, conversational conventions, and partial reasoning templates.
+
+The data mixture matters. Web text teaches broad language; books teach long-form coherence; code teaches formal structure and API patterns; math data teaches symbolic manipulation; high-quality question-answer data teaches explanatory style. A model trained with weak code data will usually underperform in coding agents no matter how good the agent scaffold is.
+
+Pretraining also creates a knowledge cutoff. The model learns what was present in the data before training. Updating facts by further training is expensive and can cause regressions, so production agents usually use retrieval and tools for freshness rather than relying on model weights for current information.
+
+\section{Compute, scaling laws, and compute-optimal training}
+
+Training cost is often described in FLOPs, the number of floating-point operations performed. Hardware throughput is described in FLOPS, floating-point operations per second. A rough intuition is that training compute grows with active parameters and tokens processed. If a model is too large for the number of tokens it sees, it may be undertrained. If it is too small for the data budget, it may lack capacity.
+
+Compute-optimal training asks how to allocate a fixed compute budget between parameters and data. Earlier scaling efforts often increased parameter count aggressively. Later work showed that training smaller models on more tokens could be more compute-efficient. For agentic systems, this matters because smaller but better-trained models may be preferable for high-volume routing, extraction, and tool-selection tasks.
+
+\section{Why memory dominates training systems}
+
+The training loop is conceptually simple: forward pass, loss, backward pass, optimizer update. The difficulty is memory. Training must store parameters, activations, gradients, and optimizer states. Optimizers such as Adam maintain moving averages of gradients and squared gradients, which can be comparable in size to the parameters themselves.
+
+This is why distributed training is not optional at scale. Data parallelism replicates the model across GPUs and splits the batch. ZeRO-style methods shard optimizer states, gradients, and parameters. Tensor parallelism splits matrix multiplications. Pipeline parallelism assigns layers to different devices. Expert parallelism places MoE experts across devices. These systems techniques are part of model capability because they determine which models can be trained and served.
+
+\section{Efficiency techniques: FlashAttention, precision, and quantization}
+
+Attention can be memory-bound because naive implementations materialize large intermediate matrices and move them through GPU memory. FlashAttention-style algorithms reorganize the computation into tiles that fit in faster memory, reducing memory traffic while preserving exact attention. This is a good example of hardware-aware modeling: the math is the same, but the implementation changes what is practical.
+
+Mixed precision uses lower-precision formats such as FP16 or BF16 for much of the computation while preserving enough numerical stability. Quantization stores weights or activations with fewer bits, reducing memory and sometimes increasing inference speed. For agents, quantization can make local or private deployment feasible, but it must be evaluated carefully. A small loss in benchmark average may translate into a large loss in tool-call reliability or reasoning stability.
+
+\section{Supervised fine-tuning}
+
+A pretrained model can continue text, but it may not behave like a helpful assistant. Supervised fine-tuning trains on prompt-response examples. In instruction tuning, the prompt is context and the target is the desired assistant response. Loss is usually computed on the assistant tokens, not on the user instruction tokens.
+
+SFT shapes the model's default behavior:
+
+\begin{itemize}[leftmargin=*]
+  \item answer questions directly;
+  \item explain concepts;
+  \item summarize documents;
+  \item write and debug code;
+  \item follow formatting instructions;
+  \item refuse unsafe requests;
+  \item use assistant-like tone.
+\end{itemize}
+
+For agents, SFT can include examples where the desired output is not a final answer but a tool call, a state update, a plan, or a request for clarification. The model learns the surface form of agent behavior before more advanced optimization begins.
+
+\section{Preference tuning: RLHF, reward models, and DPO}
+
+Many quality criteria are easier to judge than to write. A human may not know the perfect answer, but can choose which of two answers is better. Preference tuning uses this signal to shape model behavior.
+
+In RLHF, a reward model is trained on preference pairs. A common formulation is Bradley-Terry: the probability that response $y_w$ is preferred to response $y_l$ depends on the reward difference $r(x,y_w)-r(x,y_l)$. The policy is then optimized to produce higher-reward outputs while staying close to a reference model, often through a KL penalty. PPO-style methods are one way to perform this optimization.
+
+DPO avoids training a separate reward model and value model. It directly adjusts the policy so preferred completions become more likely than dispreferred completions relative to a reference policy. In practice, DPO is often attractive because it is simpler and more stable than full on-policy RLHF, though PPO-style pipelines can still be useful when online exploration and reward modeling are important.
+
+Preference tuning usually changes \emph{which} answer the model chooses, not the factual contents of the weights. It improves tone, helpfulness, harmlessness, and compliance, but it does not reliably add fresh knowledge. That is why retrieval and tools remain necessary.
+
+\section{Reasoning optimization and verifiable rewards}
+
+Reasoning models are trained to allocate more computation to difficult tasks. In math and code, correctness can often be verified automatically: a final answer matches ground truth, or a patch passes tests. This creates a verifiable reward. The model can sample candidate solutions, receive binary or graded feedback, and improve without requiring humans to write every reasoning trace.
+
+GRPO, or Group Relative Policy Optimization, is one family of methods associated with reasoning training. Instead of learning a value function baseline as in PPO, the method samples a group of completions for the same prompt and computes each completion's advantage relative to the group. If one solution succeeds where most fail, it receives a strong positive signal. This is naturally suited to tasks with checkers.
+
+Reasoning training also creates a cost problem. Longer reasoning may improve difficult tasks, but unnecessary reasoning increases latency and token cost. Production systems should route tasks by reasoning need rather than always using maximal deliberation.
+
+\section{Tool-use tuning and agentic data}
+
+Tool-use data teaches the model to emit structured calls and to interpret observations. A training example may look like:
+
+\begin{quote}
+User asks for shipping status $\rightarrow$ model calls \texttt{get\_order} $\rightarrow$ tool returns JSON $\rightarrow$ model explains status.
+\end{quote}
+
+High-quality tool-use data includes negative cases. The model must learn not to call tools when they are unnecessary, not to fabricate tool names, not to invent arguments, and not to ignore tool results. Agentic training also includes recovery: tool returns an error, model diagnoses the cause, asks for missing information, or tries a different tool.
+
+This is where many agent failures originate. A model may be excellent at final answers but poor at the intermediate protocol. The remedy is to evaluate tool choice, argument validity, observation use, and stop conditions separately.
+
+\section{Distillation and small models}
+
+Distillation transfers behavior from a stronger teacher to a smaller student. For reasoning, the teacher can generate traces and final answers; the student learns to imitate. For tool use, the teacher can generate valid trajectories; the student learns when and how to call tools. For routing, a frontier model can label a dataset of task difficulty or tool choice; a small model can learn the classifier.
+
+This is a central deployment pattern. Use frontier models to create or label data. Use smaller models to handle cheap, frequent, well-defined cases. Escalate only when needed.
+
+\section{Summary}
+
+Model capability is built through a pipeline: pretraining, SFT, preference tuning, reasoning optimization, tool-use training, and distillation. Each stage supports a different aspect of agentic behavior. Pretraining supplies broad competence; SFT supplies assistant behavior; preference tuning supplies alignment; reasoning RL supplies hard-task performance; tool-use tuning supplies interaction protocol; distillation supplies deployable efficiency.

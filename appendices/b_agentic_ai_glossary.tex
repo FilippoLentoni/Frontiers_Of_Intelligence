@@ -1,0 +1,21 @@
+\chapter{Agentic AI Glossary}
+
+\begin{description}[leftmargin=*]
+  \item[Action layer.] The layer that exposes external capabilities: APIs, tools, MCP servers, code execution, browser actions, human approval, and sub-agents.
+  \item[Agent.] A system that uses a model to pursue a goal through state, decisions, tools, observations, memory, and stop conditions.
+  \item[Agent as a tool.] A sub-agent exposed as a callable capability to a parent agent. It may be stochastic and should return structured output plus trace metadata.
+  \item[Cognitive architecture.] The model-routing, deliberation, state, clarification, and stopping logic around the model.
+  \item[Context engineering.] The design of the entire information packet given to the model, including instructions, memory, retrieved evidence, skills, examples, schemas, and observations.
+  \item[Frontier model.] A model near the leading edge of capability at a given time across reasoning, coding, tool use, multimodality, long context, and deployment maturity.
+  \item[Guardrail.] A constraint or check that blocks, modifies, routes, or records model behavior or tool calls.
+  \item[Intelligence layer.] The layer that interprets goals and makes decisions using foundation models, routing, deliberation budgets, and structured generation.
+  \item[Knowledge layer.] The layer that manages prompts, skills, memory, RAG, documents, notes, and context assembly.
+  \item[MCP.] Model Context Protocol, a standard interface for exposing tools, prompts, and resources to model hosts.
+  \item[Memory.] Session-level or persistent information retained by the agent, including conversation state, user preferences, facts, episodes, and procedures.
+  \item[RAG.] Retrieval-Augmented Generation, where relevant external evidence is retrieved and inserted into model context.
+  \item[Skill.] A reusable package of procedural knowledge, such as a checklist, playbook, prompt fragment, examples, or workflow instructions.
+  \item[Steering.] A broad term for influencing model behavior. In research it often means activation steering; in product architecture it is clearer to say prompt rule, routing rule, control policy, or structured output constraint.
+  \item[Stochastic tool.] A tool whose result may vary across calls, such as web search, OCR, a ranking service, a human process, or an LLM-powered sub-agent.
+  \item[Tool calling.] The mechanism by which a model emits structured arguments for an external function or capability.
+  \item[Trace.] A record of an interaction, including model calls, tool calls, observations, outputs, scores, costs, and metadata.
+\end{description}

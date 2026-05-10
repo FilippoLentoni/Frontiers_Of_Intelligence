@@ -1,0 +1,144 @@
+\chapter{RAG, Obsidian, and Knowledge Bases}
+
+Retrieval-Augmented Generation (RAG) connects a model to external knowledge. Instead of relying only on model weights, the system retrieves relevant evidence and places it in context. This is essential for agentic systems because agents operate on changing documents, private repositories, customer records, policies, tickets, and personal notes.
+
+This chapter connects production RAG with a practical personal knowledge system such as Obsidian. Obsidian is useful as a mental model because it treats knowledge as linked notes. A good agentic knowledge base does something similar, but with machine-readable metadata, retrieval indexes, permissions, and evaluation.
+
+\section{RAG pipeline}
+
+A RAG pipeline has four stages:
+
+\begin{enumerate}[leftmargin=*]
+  \item ingest documents;
+  \item split them into chunks;
+  \item retrieve candidate chunks for a query;
+  \item augment the model context and generate an answer.
+\end{enumerate}
+
+The generator is often blamed when RAG fails, but many failures are retrieval failures. If the right chunk is not retrieved, the model cannot ground its answer. If too many irrelevant chunks are included, the model may be distracted. If the chunks lack context, the model may misinterpret them.
+
+\section{Chunking is an information design problem}
+
+Chunking is not just splitting every 500 tokens. A chunk should be large enough to be meaningful and small enough to retrieve precisely. Good chunking respects document structure: headings, sections, tables, code functions, issue threads, and policy clauses.
+
+For example:
+
+\begin{itemize}[leftmargin=*]
+  \item a legal policy chunk should include the clause and relevant definitions;
+  \item a code chunk should include the function and nearby imports or class context;
+  \item a support manual chunk should include the problem, symptoms, and steps;
+  \item an Obsidian note chunk should include title, tags, backlinks, and local section.
+\end{itemize}
+
+Overlap reduces boundary failures but increases index size and duplicate retrieval. Metadata can reduce the need for large overlaps by carrying document-level context.
+
+\section{Hybrid retrieval}
+
+Semantic retrieval works well when the query and document use different words for the same concept. Lexical retrieval works well when exact terms matter: error codes, product IDs, legal clauses, function names, and ticket numbers. Production systems often use hybrid retrieval: combine vector search with BM25 or keyword search, then re-rank.
+
+A useful retrieval strategy is:
+
+\begin{enumerate}[leftmargin=*]
+  \item run semantic retrieval for conceptual matches;
+  \item run lexical retrieval for exact terms;
+  \item merge and deduplicate candidates;
+  \item re-rank with a cross-encoder or LLM judge;
+  \item filter by permissions and metadata;
+  \item assemble context with citations.
+\end{enumerate}
+
+\section{Contextual retrieval}
+
+A raw chunk may be ambiguous. Consider the sentence ``The limit is 14 days.'' Without context, the model does not know whether this refers to laptops, accessories, refunds, or warranties. Contextual retrieval prepends a short explanation to each chunk before embedding: what document it came from, what section it belongs to, and what the chunk is about.
+
+This improves retrieval because the embedding includes the missing context. It also improves generation because the returned chunk is self-contained. The trade-off is cost: generating context headers for many chunks requires model calls, though caching can reduce repeated prefix cost.
+
+\section{Obsidian as a human knowledge interface}
+
+Obsidian is valuable because it encourages linked, atomic notes. In an agentic system, notes can serve as:
+
+\begin{itemize}[leftmargin=*]
+  \item durable project memory;
+  \item research summaries;
+  \item meeting notes;
+  \item decision logs;
+  \item concept maps;
+  \item personal preferences;
+  \item reusable skills and procedures.
+\end{itemize}
+
+A knowledge agent connected to Obsidian should not simply dump summaries into notes. It should preserve structure: titles, headings, backlinks, tags, source links, dates, and confidence. The agent should ask whether a note is a fact, a hypothesis, a decision, or a task. This makes later retrieval more precise.
+
+\section{A note schema for agentic knowledge}
+
+A practical note schema might include:
+
+\begin{lstlisting}
+---
+type: research_note
+created: 2026-05-02
+updated: 2026-05-02
+source_quality: mixed
+confidence: medium
+tags: [agentic-ai, langgraph, evals]
+links: [[Agent Evaluation]], [[Langfuse]]
+---
+
+# Title
+
+## Claim
+A concise statement of what this note says.
+
+## Evidence
+- Source 1: summary and link
+- Source 2: summary and link
+
+## Open Questions
+- What still needs verification?
+
+## Implications
+- What should change in the project or book?
+\end{lstlisting}
+
+The YAML front matter supports filtering. Links support graph navigation. Sections support chunking. This structure makes notes useful to both humans and retrieval systems.
+
+\section{Knowledge graphs and backlinks}
+
+Vector search retrieves by similarity. Knowledge graphs retrieve by relationship. Obsidian backlinks are a lightweight knowledge graph. In enterprise systems, relationships may be explicit: customer owns account, account has contract, contract references policy, policy permits action.
+
+Agents benefit from combining both. Vector search finds relevant text. Graph traversal finds connected entities and constraints. For example, a customer-support agent may retrieve a support article by semantic similarity, then use graph relationships to verify whether the customer owns the product and whether the warranty is active.
+
+\section{Evaluating retrieval}
+
+Retrieval should be evaluated before generation. Metrics include:
+
+\begin{description}[leftmargin=*]
+  \item[Recall@k.] Did the relevant chunk appear in the top $k$ results?
+  \item[Precision@k.] How many retrieved chunks were relevant?
+  \item[Mean reciprocal rank.] How high was the first relevant result?
+  \item[NDCG.] Were more relevant results ranked earlier?
+  \item[Answer grounding.] Did the final answer use the retrieved evidence correctly?
+\end{description}
+
+For agents, retrieval evaluation should include tool-like cases: exact error messages, filenames, ticket IDs, policy clauses, and multi-hop questions. It should also include negative cases where the knowledge base does not contain the answer; the correct behavior is to say so or search elsewhere.
+
+\section{RAG failure modes}
+
+Common failures include:
+
+\begin{itemize}[leftmargin=*]
+  \item wrong chunk retrieved;
+  \item right chunk retrieved but ignored;
+  \item stale document retrieved;
+  \item access-controlled document exposed to wrong user;
+  \item chunk lacks definitions from earlier section;
+  \item model overgeneralizes from one retrieved example;
+  \item citations do not support the claim;
+  \item retrieval returns no result but model answers anyway.
+\end{itemize}
+
+Each failure has a different fix. Better prompting will not fix stale indexes. Larger context will not fix permission leakage. A stronger model will not fix missing documents.
+
+\section{Summary}
+
+RAG is the bridge between frontier models and external knowledge. Obsidian illustrates how human knowledge can be structured as linked notes; production systems add indexing, permissions, metadata, evaluation, and governance. The goal is not to retrieve more context. The goal is to retrieve the right context, label it correctly, and make it usable by the intelligence layer.

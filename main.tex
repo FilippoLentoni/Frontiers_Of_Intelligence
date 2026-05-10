@@ -1,26 +1,39 @@
 \documentclass[11pt,oneside]{book}
 
-\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
 \usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
 \usepackage{lmodern}
 \usepackage{microtype}
-\usepackage{geometry}
+\usepackage{xurl}
 \usepackage{hyperref}
-
-\geometry{
-  paper=a5paper,
-  inner=24mm,
-  outer=18mm,
-  top=22mm,
-  bottom=24mm
-}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
 
 \hypersetup{
   colorlinks=true,
-  linkcolor=blue,
-  urlcolor=blue,
-  pdftitle={Frontiers of Intelligence},
-  pdfauthor={Filippo Lentoni}
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black,
+  citecolor=blue!55!black
+}
+
+\lstdefinelanguage{json}{
+  morestring=[b]",
+  morecomment=[l]{//}
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  showstringspaces=false
 }
 
 \title{Frontiers of Intelligence}
@@ -28,36 +41,41 @@
 \date{\today}
 
 \begin{document}
-
 \frontmatter
 \maketitle
 \tableofcontents
 
 \mainmatter
 
-\part{Theory}
-\include{theory/chapter1}
-\include{theory/chapter2}
-\include{theory/chapter3}
-\include{theory/chapter4}
-\include{theory/chapter5}
-\include{theory/chapter6}
-\include{theory/chapter7}
-\include{theory/chapter8}
-\include{theory/chapter9}
+\part{The Intelligence Layer}
+\input{chapters/01_intelligence_layer_overview}
+\input{chapters/02_from_text_to_transformers}
+\input{chapters/03_frontier_model_capabilities}
+\input{chapters/04_training_alignment_reasoning}
+\input{chapters/05_cognitive_architecture}
 
-\part{Applications}
-\include{applications/chapter1}
-\include{applications/chapter2}
-\include{applications/chapter3}
-\include{applications/chapter4}
-\include{applications/chapter5}
-\include{applications/chapter6}
-\include{applications/chapter7}
+\part{The Action Layer}
+\input{chapters/06_action_layer_overview}
+\input{chapters/07_tools_function_calling_mcp}
+
+\part{The Memory and Knowledge Layer}
+\input{chapters/09_memory_and_knowledge_layer}
+
+\part{The Security and Governance Layer}
+\input{chapters/11_security_layer}
+\input{chapters/12_identity_permissions_guardrails}
+
+\part{Applications: Building Agents in Production}
+\input{chapters/08_building_agents_with_langgraph}
+\input{chapters/13_deploying_with_aws_agentcore}
+\input{chapters/14_evaluating_with_langfuse}
+
+\part{Building an AI-First Organization}
+\input{chapters/18_when_to_use_agents}
+\input{chapters/22_ai_first_organization}
+
+\part{Economics, Limits, and the Future}
+\input{chapters/17_cost_tokens_latency_energy}
 
 \backmatter
-\chapter*{Acknowledgments}
-\addcontentsline{toc}{chapter}{Acknowledgments}
-Thank you to everyone who helped bring this book to life.
-
 \end{document}

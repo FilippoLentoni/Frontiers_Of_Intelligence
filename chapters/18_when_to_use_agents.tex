@@ -1,0 +1,86 @@
+\chapter{When to Use Agents and When Not To}
+
+Agents are powerful, but they are not the right abstraction for every problem. Many tasks are better solved by deterministic code, retrieval, a classifier, a workflow engine, or a single model call. The best agent architect knows when not to build an agent.
+
+\section{Use an agent when the task is adaptive}
+
+Agents are useful when the path to completion cannot be fully specified in advance. This happens when:
+
+\begin{itemize}[leftmargin=*]
+  \item the task is multi-step;
+  \item the next step depends on observations;
+  \item multiple tools may be needed;
+  \item information is incomplete at the start;
+  \item the environment changes;
+  \item there are recoverable failures;
+  \item the system must decide when to ask a human.
+\end{itemize}
+
+Examples include debugging a codebase, researching a topic, resolving a support case, investigating an incident, reconciling documents, or planning a trip with changing constraints.
+
+\section{Do not use an agent when a simpler system works}
+
+Do not use an agent when:
+
+\begin{itemize}[leftmargin=*]
+  \item a deterministic script is enough;
+  \item a single API call answers the request;
+  \item a classifier can route the case;
+  \item a retrieval system can return the document directly;
+  \item the workflow is fixed and does not need model decisions;
+  \item ultra-low latency is required;
+  \item errors are expensive and hard to detect;
+  \item permissions cannot be safely scoped;
+  \item success cannot be evaluated.
+\end{itemize}
+
+A model should not be used to add numbers when a calculator exists. An agent should not be used to update records when a deterministic workflow can do so safely.
+
+\section{A decision ladder}
+
+Use the simplest abstraction that meets the requirement.
+
+\begin{enumerate}[leftmargin=*]
+  \item Deterministic code.
+  \item Search or database query.
+  \item Classifier or extractor.
+  \item Single LLM call.
+  \item RAG plus single LLM call.
+  \item Tool-calling assistant.
+  \item Graph-based agent.
+  \item Multi-agent system.
+\end{enumerate}
+
+Move up the ladder only when the lower level fails because the task requires adaptation, judgment, or multi-step interaction.
+
+\section{Agent readiness checklist}
+
+Before building an agent, ask:
+
+\begin{itemize}[leftmargin=*]
+  \item What is the success criterion?
+  \item Which tools are needed?
+  \item Which actions have side effects?
+  \item Can the agent verify progress?
+  \item What is the maximum budget?
+  \item What should trigger human approval?
+  \item What is the failure taxonomy?
+  \item What evaluation dataset will be used?
+  \item What is the rollback plan?
+\end{itemize}
+
+If these questions cannot be answered, the agent is not production-ready.
+
+\section{Common overuse patterns}
+
+\begin{description}[leftmargin=*]
+  \item[Agent as expensive router.] A frontier model classifies tasks that a cheap classifier could route.
+  \item[Agent as unreliable API wrapper.] The model chooses parameters for a fixed API call when a form would be safer.
+  \item[Agent as search replacement.] The agent summarizes without reliable retrieval or citations.
+  \item[Agent as policy engine.] The model decides authorization instead of infrastructure.
+  \item[Agent as workflow engine.] The model improvises a fixed business process that should be encoded deterministically.
+\end{description}
+
+\section{Summary}
+
+Agents are best for uncertain, multi-step, tool-rich workflows where observations determine the next step. They are not a replacement for deterministic software. The right design uses agents only where model judgment adds value and surrounds them with tools, knowledge, security, evaluation, and cost controls.

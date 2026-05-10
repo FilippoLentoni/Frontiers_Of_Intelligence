@@ -1,0 +1,200 @@
+\chapter{Building Agents with LangGraph}
+
+LangGraph is useful because agents are not simple chains. They branch, loop, retry, pause for human input, and resume after failures. The official LangGraph documentation describes the framework around state, nodes, edges, durable execution, human-in-the-loop workflows, and memory.\footnote{LangGraph overview: \url{https://docs.langchain.com/oss/python/langgraph/overview}. Graph API: \url{https://docs.langchain.com/oss/python/langgraph/graph-api}.} This is the first application chapter: we turn the layers from the previous chapters into an implementation pattern.
+
+\section{Why graphs instead of chains}
+
+A chain is a fixed sequence: step A, then step B, then step C. Many agent workflows do not behave this way. A research agent may search, read, decide the evidence is insufficient, search again, summarize, ask for approval, and then save a note. A coding agent may inspect files, edit code, run tests, fail, inspect logs, edit again, and stop only when tests pass. These workflows require cycles.
+
+A graph makes the control structure explicit. Nodes do work. Edges decide where to go next. State carries information between nodes. Conditional edges allow the workflow to branch. Persistence allows the workflow to resume.
+
+\section{State as the agent's working memory}
+
+The first design decision in LangGraph is the state schema. State should contain the minimum information needed to make the next decision and to audit what happened.
+
+A typical state for a tool-using agent might include:
+
+\begin{lstlisting}[language=Python]
+from typing import TypedDict, List, Optional, Any
+
+class AgentState(TypedDict):
+    user_goal: str
+    messages: List[dict]
+    plan: List[str]
+    observations: List[dict]
+    selected_tools: List[str]
+    final_answer: Optional[str]
+    needs_human_approval: bool
+    budget: dict
+    errors: List[dict]
+\end{lstlisting}
+
+This schema is more than type hygiene. It forces the developer to decide what the agent is allowed to remember and what the next node can depend on. It also makes evaluation easier because failures can be localized to state transitions.
+
+\section{Core nodes}
+
+A robust first agent can be decomposed into the following nodes.
+
+\begin{longtable}{p{0.24\textwidth}p{0.62\textwidth}}
+\toprule
+\textbf{Node} & \textbf{Responsibility} \\
+\midrule
+Classify intent & Determine whether the task is informational, action-oriented, coding, research, or unsupported. \\
+Assemble context & Retrieve memory, skills, prompts, examples, and documents from the knowledge layer. \\
+Plan & Produce a short plan or decide that no plan is needed. \\
+Select action & Decide whether to answer, retrieve, call a tool, delegate, ask, or stop. \\
+Execute tool & Validate and execute the selected tool call. \\
+Interpret observation & Convert raw tool output into state updates. \\
+Check safety & Apply policy and permission checks before side effects. \\
+Human approval & Pause when a human must approve a consequential action. \\
+Synthesize answer & Produce the final user-facing answer. \\
+Evaluate trace & Score the run or record failure labels for later feedback. \\
+\bottomrule
+\end{longtable}
+
+These nodes do not all need frontier models. Classification may use a small model. Tool execution may be deterministic code. Synthesis may use a larger model only when the answer is complex.
+
+\section{Edges and routing}
+
+Edges encode the control policy. For example:
+
+\begin{itemize}[leftmargin=*]
+  \item if intent is unsupported, go to refusal or clarification;
+  \item if information is missing and recoverable, go to retrieval;
+  \item if a tool call is proposed and low risk, go to execution;
+  \item if a tool call has side effects, go to approval;
+  \item if the budget is exhausted, go to summary and stop;
+  \item if validation fails, go to repair or ask user;
+  \item if success criteria are met, go to final answer.
+\end{itemize}
+
+This is where the abstract cognitive architecture becomes concrete. The model can suggest the next step, but the graph decides whether the transition is allowed.
+
+\section{Minimal graph skeleton}
+
+The following skeleton shows the shape. It is intentionally simplified; production code would include validators, tracing, and error handling.
+
+\begin{lstlisting}[language=Python]
+from langgraph.graph import StateGraph, START, END
+
+builder = StateGraph(AgentState)
+
+builder.add_node("classify", classify_intent)
+builder.add_node("context", assemble_context)
+builder.add_node("plan", create_or_skip_plan)
+builder.add_node("act", select_action)
+builder.add_node("tool", execute_tool)
+builder.add_node("observe", interpret_observation)
+builder.add_node("approval", request_human_approval)
+builder.add_node("answer", synthesize_answer)
+
+builder.add_edge(START, "classify")
+builder.add_edge("classify", "context")
+builder.add_edge("context", "plan")
+builder.add_edge("plan", "act")
+
+builder.add_conditional_edges(
+    "act",
+    route_action,
+    {
+        "tool": "tool",
+        "approval": "approval",
+        "answer": "answer",
+        "stop": END,
+    },
+)
+
+builder.add_edge("tool", "observe")
+builder.add_conditional_edges(
+    "observe",
+    route_after_observation,
+    {"continue": "act", "answer": "answer", "stop": END},
+)
+builder.add_edge("answer", END)
+
+graph = builder.compile()
+\end{lstlisting}
+
+The graph clarifies where loops happen. The agent may move from \texttt{act} to \texttt{tool} to \texttt{observe} and then back to \texttt{act}. Without a graph, this loop is often hidden in a prompt and hard to debug.
+
+\section{Tools as nodes versus model-called tools}
+
+There are two common ways to integrate tools.
+
+\begin{description}[leftmargin=*]
+  \item[Tool as model-call output.] The model emits a tool call, and a tool executor node runs it. This is flexible and works well when the model must choose among tools.
+  \item[Tool as explicit node.] The graph routes to a specific node that calls a specific tool. This is safer when the workflow is known or the action is high-risk.
+\end{description}
+
+For example, a return-policy lookup can be model-selected. A production deployment step should be an explicit node with validation and approval.
+
+\section{Agent as a tool in LangGraph}
+
+A sub-agent can be represented as a node or as a callable tool. The key is to constrain it with a contract. Suppose a research sub-agent receives a question and returns a cited brief. The parent graph should pass a budget and require structured output.
+
+\begin{lstlisting}[language=Python]
+def call_research_agent(state: AgentState) -> dict:
+    result = research_graph.invoke({
+        "question": state["user_goal"],
+        "max_searches": 5,
+        "require_sources": True,
+    })
+    return {
+        "observations": state["observations"] + [{
+            "type": "research_agent",
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "confidence": result["confidence"],
+            "trace_id": result.get("trace_id"),
+        }]
+    }
+\end{lstlisting}
+
+This makes stochastic delegation observable. The parent agent should not blindly trust the sub-agent. It can verify citations, ask a judge model to critique the answer, or route to human review.
+
+\section{Persistence and durable execution}
+
+LangGraph's persistence is important for production because long-running agents may pause, fail, or wait for human input. Durable execution stores progress so completed steps do not need to be repeated after interruption. The LangGraph documentation describes this as saving state at execution steps so workflows can resume rather than restarting from scratch.\footnote{LangGraph durable execution: \url{https://docs.langchain.com/oss/python/langgraph/durable-execution}.}
+
+Durability changes what agents can do. A customer-support agent can wait for a human approval. A research agent can pause while a user confirms scope. A deployment agent can stop before applying changes and resume after approval. Without persistence, these workflows are fragile.
+
+\section{Human-in-the-loop checkpoints}
+
+Human approval should be a graph concept, not an afterthought. A node can prepare an approval request with:
+
+\begin{itemize}[leftmargin=*]
+  \item proposed action;
+  \item reason for action;
+  \item expected side effects;
+  \item evidence;
+  \item rollback plan;
+  \item cost estimate;
+  \item exact payload to execute.
+\end{itemize}
+
+The graph then pauses. After approval, it continues to execution. After rejection, it routes to revision or final explanation.
+
+\section{Error handling and retries}
+
+Retries should be typed, not infinite. A schema validation error can route to argument repair. A rate-limit error can wait or use a backup provider. An authorization error should not be retried by the model; it should ask for permission or stop. A tool returning ambiguous results should route to clarification.
+
+A good retry policy records:
+
+\begin{itemize}[leftmargin=*]
+  \item error type;
+  \item number of attempts;
+  \item repair strategy;
+  \item whether the model saw the raw error;
+  \item whether the next attempt changed arguments;
+  \item whether human escalation occurred.
+\end{itemize}
+
+\section{Observability hooks}
+
+Every node should produce traceable metadata: model, prompt version, input tokens, output tokens, selected tools, latency, cost, errors, and scores. This is what later enables Langfuse evaluation and CI/CD gates.
+
+A practical rule is: if a failure cannot be localized to a node, the graph is not observable enough.
+
+\section{Summary}
+
+LangGraph turns an agent from an implicit prompt loop into an explicit state machine. State records what the agent knows. Nodes do work. Edges encode control. Tools and sub-agents become callable capabilities. Persistence supports long-running workflows. Human checkpoints make consequential actions governable. This structure is the bridge between the conceptual four-layer architecture and a deployable agent.

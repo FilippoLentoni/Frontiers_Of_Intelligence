@@ -1,0 +1,263 @@
+\chapter{Token Economics, Energy, and AI Infrastructure}
+
+Agentic systems are constrained by economics. A workflow that looks impressive in a demo may be unusable if it takes thirty seconds, calls a frontier model ten times, runs unnecessary searches, and writes thousands of tokens of hidden reasoning. Cost engineering is therefore part of agent architecture.
+
+The central idea of this chapter is simple: in classical software, the marginal unit of cost was often a server request. In AI-native software, the marginal unit of cost is the token. But the token is only the accounting unit. Physically, every token is backed by accelerator time, electricity, memory bandwidth, cooling, networking, semiconductor capacity, and grid capacity.
+
+\section{Tokens are the economic unit; watts are the physical unit}
+
+A token is a small piece of text or code, but economically it is also the basic unit used to meter foundation-model work. Input tokens include the user request, system instructions, tool schemas, retrieved documents, memory summaries, examples, previous conversation turns, and observations from tools. Output tokens include final answers, tool-call arguments, intermediate plans, summaries, and, depending on the provider and model, hidden reasoning tokens.
+
+The economic chain looks like this:
+
+\[
+\text{tokens} \rightarrow \text{accelerator-seconds} \rightarrow \text{kWh} \rightarrow \text{MW/GW capacity} \rightarrow \text{power plants + grid}
+\]
+
+So when an AI product generates one billion tokens, it is not merely producing text. A fleet of accelerators spent time doing matrix multiplications, moving data through high-bandwidth memory, storing KV caches, communicating across networks, producing heat, and drawing electricity from a data center. The token is the billable abstraction. Energy is the physical substrate.
+
+There is no universal energy-per-token constant. The energy per token depends on model size, dense versus mixture-of-experts architecture, inference versus training, input tokens versus output tokens, context length, batch size, cache reuse, quantization, hardware generation, memory bandwidth, data-center power usage effectiveness, and the surrounding retrieval and tool system.
+
+A useful fleet-level identity is:
+
+\[
+\text{power} = \text{tokens per second} \times \text{joules per token}.
+\]
+
+Equivalently:
+
+\[
+\text{energy per token} = \frac{\text{IT power} \times \text{time}}{\text{tokens processed}}.
+\]
+
+This equation is more useful than pretending that every token always costs the same amount of energy. The point is not to memorize one number. The point is to understand that token volume eventually becomes energy demand.
+
+\section{What a gigawatt means for AI}
+
+A gigawatt is not an abstract engineering number. It is city-scale or industrial-scale power.
+
+\[
+1\,\text{GW} \times 24\,\text{hours/day} \times 365\,\text{days/year} = 8.76\,\text{TWh/year}.
+\]
+
+A 1 GW AI campus is therefore not just a large server room. It is an energy-infrastructure project. It competes for substations, transmission, transformers, gas turbines, renewable projects, nuclear projects, batteries, water, land, permitting, and local political approval.
+
+The International Energy Agency uses 25 MW as a conventional data-center scale and 100 MW as a hyperscale data-center scale, while noting that the largest planned data centers can be measured in thousands of megawatts.\footnote{International Energy Agency, ``Data centre electricity consumption in household electricity consumption equivalents, 2024,'' \url{https://www.iea.org/data-and-statistics/charts/data-centre-electricity-consumption-in-household-electricity-consumption-equivalents-2024}.} A 100 MW hyperscale data center is already 0.1 GW. The direction of travel is clear: AI has moved software infrastructure into the domain of energy infrastructure.
+
+Goldman Sachs Research projected global data-center power demand to grow to about 92 GW by 2027, with the growth rate depending on AI demand and GPU power assumptions.\footnote{Goldman Sachs Research, ``How AI Is Transforming Data Centers and Ramping Up Power Demand,'' Aug. 29, 2025, \url{https://www.goldmansachs.com/insights/articles/how-ai-is-transforming-data-centers-and-ramping-up-power-demand}.} The IEA reported that data-center electricity demand rose sharply in 2025 and that AI-focused data centers grew even faster than overall data-center demand.\footnote{International Energy Agency, ``Data centre electricity use surged in 2025, even with tightening bottlenecks driving a scramble for solutions,'' Apr. 16, 2026, \url{https://www.iea.org/news/data-centre-electricity-use-surged-in-2025-even-with-tightening-bottlenecks-driving-a-scramble-for-solutions}.}
+
+A concrete hardware example helps make the scale tangible. NVIDIA's DGX GB200 rack-scale system documentation describes an NVL72 rack with 72 Blackwell GPUs and says the rack power consumption is approximately 120 kW.\footnote{NVIDIA, ``DGX GB Rack Scale Systems User Guide: Hardware,'' \url{https://docs.nvidia.com/dgx/dgxgb200-user-guide/hardware.html}.} If one imagines 1 GW of IT power allocated only to such racks, the rough order of magnitude is:
+
+\[
+\frac{1{,}000{,}000\,\text{kW}}{120\,\text{kW/rack}} \approx 8{,}333\,\text{racks}.
+\]
+
+At 72 GPUs per rack, that is roughly:
+
+\[
+8{,}333 \times 72 \approx 600{,}000\,\text{GPUs}.
+\]
+
+This is a simplified calculation. Real facilities must account for cooling, networking, storage, redundancy, utilization, and power usage effectiveness. But the order of magnitude matters: frontier AI demand translates into hundreds of thousands of accelerators and grid-scale power.
+
+\section{Why output tokens are usually more expensive than input tokens}
+
+Transformer inference has two phases. During prefill, the model processes the input context. This phase can be parallelized across the input sequence. During decoding, the model generates output tokens autoregressively: it produces token 1, then token 2, then token 3, and so on. The next token depends on the previous generated tokens. This makes long outputs expensive in both latency and energy.
+
+This creates a practical rule:
+
+\begin{quote}
+The most expensive token is often the unnecessary output token.
+\end{quote}
+
+Reasoning models make this especially important. A reasoning model may spend invisible or internal tokens exploring possible solutions before producing the visible answer. That can be valuable for difficult tasks, but wasteful for simple ones. The engineering problem is not ``use more reasoning'' or ``use less reasoning.'' The problem is to allocate reasoning where it changes the outcome.
+
+Agents amplify token use because they do not answer once. They may plan, retrieve, call tools, inspect tool outputs, retry, summarize, judge, and continue. A poorly designed agent multiplies token use through long prompts, overly broad retrieved context, verbose tool results, hidden reasoning, repeated failed tool calls, uncompressed memory, and unnecessary multi-agent conversations.
+
+This is why context engineering is an economic discipline, not only a modeling discipline. A better context packet reduces dollars, latency, and energy at the same time.
+
+\section{Context is not free}
+
+Long context windows are powerful, but they are not free. Passing an entire repository or policy manual to the model may be simpler than retrieval, but it increases cost and can reduce the model's attention to the relevant part. Context should be treated as scarce.
+
+A good context budget allocates tokens among:
+
+\begin{itemize}[leftmargin=*]
+  \item task instruction;
+  \item user request;
+  \item relevant memory;
+  \item retrieved evidence;
+  \item tool schemas;
+  \item examples;
+  \item output format;
+  \item recent observations.
+\end{itemize}
+
+If one category grows, another must shrink. The knowledge layer should make this trade-off explicit. A well-designed agent does not simply ``add more context.'' It selects, compresses, ranks, and cites context according to task value.
+
+\section{Cost-control patterns}
+
+Useful cost-control patterns include:
+
+\begin{description}[leftmargin=*]
+  \item[Model routing.] Use cheaper models for simple tasks and frontier models for hard tasks.
+  \item[Tool routing.] Provide only relevant tools to the main model.
+  \item[Retrieval before long context.] Retrieve targeted evidence instead of pasting entire corpora.
+  \item[Prompt caching.] Reuse repeated prefixes such as policies, repository maps, or long task instructions.
+  \item[Output constraints.] Ask for concise, structured outputs where possible.
+  \item[Budget-aware loops.] Stop after maximum iterations, searches, time, or dollars.
+  \item[Batch evaluation.] Run judge calls offline in batches instead of synchronously where possible.
+  \item[Speculative decoding.] Use a faster draft model to propose tokens and a stronger model to verify them when the serving stack supports it.
+  \item[KV-cache optimization.] Avoid recomputing context and manage long-context cache memory explicitly.
+  \item[Right-sized memory.] Retrieve only memories that are relevant and authorized for the current task.
+\end{description}
+
+The goal is not to minimize tokens blindly. The goal is to maximize useful work per token.
+
+\section{From AI software to AI industrial capacity}
+
+The chip supply chain behind AI is not simply ``NVIDIA makes GPUs.'' It is a layered industrial system:
+
+\[
+\begin{aligned}
+&\text{architecture and chip design} \\
+&\rightarrow \text{EDA tools and IP} \\
+&\rightarrow \text{advanced wafer fabrication} \\
+&\rightarrow \text{HBM memory} \\
+&\rightarrow \text{advanced packaging} \\
+&\rightarrow \text{substrates, PCBs, and optics} \\
+&\rightarrow \text{servers and racks} \\
+&\rightarrow \text{data centers} \\
+&\rightarrow \text{power, cooling, and operations.}
+\end{aligned}
+\]
+
+A frontier model company may design or buy accelerators, but it depends on a global chain of specialized suppliers. Electronic design automation comes from companies such as Synopsys, Cadence, and Siemens EDA. Leading-edge fabrication depends heavily on foundry capacity. High-bandwidth memory comes from specialized memory vendors. Advanced packaging integrates logic dies and HBM into usable compute-memory packages. Networking depends on switches, optical transceivers, cables, and printed circuit boards. Finally, data-center deployment depends on utilities, construction, cooling systems, backup power, operations, and permitting.
+
+In other words, AI economics is not only software economics. It is semiconductor economics, power economics, and supply-chain economics.
+
+\section{HBM: why memory bandwidth became strategic}
+
+High-bandwidth memory, or HBM, is central because many AI workloads are constrained not only by arithmetic but by memory movement. A transformer must move weights, activations, attention data, and KV-cache state. During inference, the KV cache grows with sequence length and batch size. During training, activations, gradients, optimizer states, and parameters all compete for memory.
+
+HBM is valuable because it places stacked memory close to the accelerator die and provides much higher bandwidth than conventional memory architectures. But HBM is difficult to produce, thermally constrained, expensive, and tied to advanced packaging. If HBM supply is constrained, the accelerator supply chain is constrained even if logic wafers are available.
+
+Epoch AI estimated that the four largest AI chip designers consumed around 90\% of global CoWoS advanced-packaging capacity and HBM supply in 2025 while consuming only about 12\% of advanced logic die production. Their conclusion is important: advanced packaging and HBM, not logic dies alone, were the binding constraints in AI chip production.\footnote{Epoch AI, ``Advanced packaging and HBM, not logic dies, were the bottlenecks on AI chip production in 2025,'' Mar. 12, 2026, \url{https://epoch.ai/data-insights/ai-chip-supply-chain-constraints}.}
+
+This changes the way we should think about an ``AI chip.'' The economically useful unit is not only a logic die. It is a compute-memory package: accelerator logic plus HBM plus packaging plus cooling plus networking.
+
+\section{Advanced packaging as a strategic chokepoint}
+
+For decades, semiconductor strategy focused heavily on the leading-edge process node: smaller transistors, denser logic, faster chips. That still matters. But AI has made advanced packaging a strategic bottleneck.
+
+Frontier accelerators need very large compute-memory systems. They combine accelerator dies, HBM stacks, silicon interposers or bridges, dense interconnects, thermal management, and package-level integration. Technologies such as TSMC's CoWoS are critical because they connect logic and memory at the bandwidth required for large AI workloads.
+
+TrendForce has reported severe shortages in 2.5D advanced packaging capacity and expects those shortages to ease only gradually as capacity expands.\footnote{TrendForce, ``AI Competition Turns into a Supply Chain Arms Race,'' Apr. 30, 2026, \url{https://www.trendforce.com/presscenter/news/20260430-13028.html}.} Reuters reported that Broadcom identified TSMC capacity as a bottleneck in 2026 and noted adjacent shortages in lasers and printed circuit boards for optical transceivers.\footnote{Reuters, ``Broadcom flags supply constraints, says TSMC capacity a bottleneck,'' Mar. 24, 2026, \url{https://www.reuters.com/world/asia-pacific/broadcom-flags-supply-constraints-says-tsmc-capacity-bottleneck-2026-03-24/}.}
+
+The strategic question is shifting from only:
+
+\begin{quote}
+Who can make the smallest transistor?
+\end{quote}
+
+to:
+
+\begin{quote}
+Who can integrate the largest compute-memory system at acceptable yield, power, thermals, cost, and supply-chain reliability?
+\end{quote}
+
+\section{Power is becoming part of the model roadmap}
+
+The model roadmap used to be described mainly in terms of parameters, data, and benchmarks. That view is incomplete. The next frontier models are constrained by deployable megawatts.
+
+A more realistic roadmap is:
+
+\[
+\text{better AI} = \text{more useful intelligence per dollar, per second, and per watt}.
+\]
+
+This explains why efficiency is central:
+
+\begin{itemize}[leftmargin=*]
+  \item mixture-of-experts activates fewer parameters per token than a dense model of comparable total size;
+  \item quantization reduces memory footprint and bandwidth pressure;
+  \item speculative decoding can reduce latency;
+  \item KV-cache optimization reduces memory pressure during long-context inference;
+  \item small specialized models handle routine tasks cheaply;
+  \item model routing sends simple tasks to cheaper models and escalates hard tasks;
+  \item prompt caching avoids recomputing common prefixes;
+  \item better tools replace model reasoning with deterministic computation;
+  \item better prompts remove unnecessary tokens.
+\end{itemize}
+
+For an AI-first organization, the management metric should not only be headcount productivity. It should include useful work per token and eventually useful work per kWh. ``Token maxing'' is powerful only if tokens are allocated intelligently. Wasteful token consumption is just a new kind of organizational overhead.
+
+\section{The risks today}
+
+The economics of AI are now exposed to risks that look more like industrial infrastructure risks than software risks.
+
+\subsection{Energy and grid risk}
+
+AI demand may grow faster than local grids can absorb. Even if a company can buy accelerators, it may not be able to secure enough permitted power, transmission capacity, transformers, substations, water, and cooling infrastructure to operate them. This risk is especially acute when data centers cluster in a few regions.
+
+The risk is not only total electricity supply. It is also local interconnection. A power plant on paper does not help if transmission, permitting, and grid upgrades lag demand.
+
+\subsection{Cost inflation risk}
+
+In normal software, scale often pushes marginal cost toward zero. In AI, marginal cost is bounded by physical resources. If power, HBM, advanced packaging, networking, and cooling are scarce, inference prices may not fall as quickly as product teams expect.
+
+The risk is that companies build products assuming token costs will collapse, but demand absorbs efficiency gains. Better hardware lowers cost per token; new use cases immediately consume more tokens.
+
+\subsection{Supply-chain concentration risk}
+
+AI infrastructure depends on a small number of critical nodes: leading foundries, HBM suppliers, advanced packaging capacity, lithography tools, EDA vendors, optical networking, high-end substrates, and specialized cooling systems. One chokepoint can slow the entire buildout.
+
+TSMC's own risk disclosures identify natural disasters, cyberattacks, supply-chain disruption, geopolitical tensions, sabotage, critical-facility failures, and utility disruptions such as water, electricity, and natural gas as risks that could interrupt operations.\footnote{TSMC, ``Risk Management,'' \url{https://investor.tsmc.com/english/risk-management}.}
+
+\subsection{Geopolitical risk}
+
+The semiconductor supply chain is directly embedded in U.S.-China strategic competition. Export-control rules can change who can buy, build, or operate advanced AI infrastructure. In 2025, the U.S. Commerce Department announced the rescission of the Biden-era AI Diffusion Rule while strengthening chip-related export controls.\footnote{U.S. Bureau of Industry and Security, ``Department of Commerce Announces Rescission of Biden-Era Artificial Intelligence Diffusion Rule, Strengthens Chip-Related Export Controls,'' May 13, 2025, \url{https://www.bis.gov/press-release/department-commerce-announces-rescission-biden-era-artificial-intelligence-diffusion-rule-strengthens}.}
+
+Taiwan Strait risk is also AI infrastructure risk because leading-edge semiconductor manufacturing and advanced packaging capacity are geographically concentrated.
+
+\subsection{Technology obsolescence risk}
+
+AI hardware depreciates quickly. A data center designed around one generation of GPUs may face a new generation with different power density, cooling requirements, networking topology, rack design, and memory needs. The risk is not simply that old hardware becomes slower. The risk is that the entire facility design becomes suboptimal.
+
+\subsection{Utilization risk}
+
+Owning accelerators is not the same as using them efficiently. Idle GPUs destroy economics. Poor batching, fragmented workloads, bad scheduling, inefficient inference kernels, and unreliable job orchestration waste both capital and energy. The winners are not only those with the most GPUs. They are those with the best fleet utilization.
+
+\subsection{Environmental and social-license risk}
+
+Large data centers can affect local power prices, water use, land use, and transmission planning. If communities see AI campuses as consuming scarce resources without enough local benefit, permitting becomes harder. Environmental and social-license constraints can become just as real as chip constraints.
+
+\subsection{Demand uncertainty and bubble risk}
+
+AI infrastructure is being financed ahead of fully proven long-term revenue. Short-term shortages can coexist with long-term overcapacity if demand, enterprise adoption, model monetization, or willingness to pay disappoints. The industry may be supply-constrained today and overbuilt tomorrow in specific regions, hardware generations, or application segments.
+
+\section{Operating metrics for AI economics}
+
+AI-native companies need metrics that connect product value to physical cost. Useful metrics include:
+
+\begin{itemize}[leftmargin=*]
+  \item cost per successful task;
+  \item latency per successful task;
+  \item tokens per successful task;
+  \item model calls per task;
+  \item tool calls per task;
+  \item retry rate;
+  \item human intervention rate;
+  \item GPU utilization;
+  \item cache hit rate;
+  \item useful work per token;
+  \item useful work per kWh.
+\end{itemize}
+
+Cost per successful task is more meaningful than raw cost per token. A cheap model that fails repeatedly can be more expensive than a frontier model that succeeds once. Similarly, a long-context call that eliminates five tool calls may be cheaper than a superficially cheaper multi-step loop. The unit of optimization should be the completed business outcome.
+
+\section{Summary}
+
+Tokens are the economic unit of AI, but watts are the physical unit. At small scale, token cost looks like an API bill. At large scale, token demand becomes GPU demand, HBM demand, advanced-packaging demand, networking demand, cooling demand, and grid demand. This is why AI economics cannot be separated from chip supply chains and energy infrastructure.
+
+The future of AI will not be determined only by who has the smartest model. It will be determined by who can convert electricity, chips, data, and human intent into useful tokens most efficiently. Intelligence is becoming an industrial process.

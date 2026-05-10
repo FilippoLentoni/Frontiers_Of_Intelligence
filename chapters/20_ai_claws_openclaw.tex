@@ -1,0 +1,217 @@
+\chapter{AI Claws and OpenClaw}
+
+Most agent frameworks are built around a request-response interaction: a user asks for something, the agent reasons, calls tools, returns an answer, and stops. A \emph{claw} is a different operating pattern. A claw is a long-running, personal or organizational agent that lives near the user's communication channels, file system, browser, shell, calendars, and other devices. It can be contacted like a person, can keep sessions alive, can run scheduled tasks, and can delegate work to sub-agents or coding agents. The word is still emerging, so this chapter uses it descriptively rather than as a settled academic term.
+
+OpenClaw is a useful concrete example because it is not merely a Python graph library or a hosted chat interface. It is closer to an agent harness: a gateway, runtime, tool system, channel router, workspace, memory/context engine, and control surface around one or more models. Its documentation describes a long-lived Gateway that owns messaging surfaces such as WhatsApp, Telegram, Slack, Discord, Signal, iMessage, and WebChat; clients and device nodes connect to that Gateway over WebSocket; the Gateway validates frames, emits events, manages sessions, and exposes capabilities to the agent.\footnote{OpenClaw Gateway architecture: \url{https://docs.openclaw.ai/concepts/architecture}. OpenClaw Getting Started: \url{https://docs.openclaw.ai/start/getting-started}.}
+
+\section{What is a claw?}
+
+A claw is best understood as a persistent agentic operator. It is not just a prompt. It is not just a tool call. It is not even only a graph. It is an agent that has an operating environment.
+
+The useful distinction is the following:
+
+\begin{description}[leftmargin=*]
+  \item[Chatbot.] Stateless or lightly stateful conversation. It answers user messages.
+  \item[Tool-using agent.] A model with tools. It can retrieve, calculate, browse, send, or edit.
+  \item[Graph agent.] A workflow with explicit state, nodes, edges, retries, checkpoints, and evaluation.
+  \item[Claw.] A long-running operator that can live across channels, sessions, devices, tools, schedules, and workspaces.
+\end{description}
+
+The key property of a claw is \emph{presence}. It is always reachable somewhere: a dashboard, a CLI, WhatsApp, Telegram, Slack, a local machine, or a remote host. Because it is present, it needs concepts that a notebook prototype usually avoids: identity, pairing, permissions, sandboxing, session pruning, command queues, idempotency, restart behavior, and operational monitoring.
+
+\section{How OpenClaw works at a high level}
+
+OpenClaw's architecture can be summarized as five cooperating components.
+
+\subsection{The Gateway}
+
+The Gateway is the long-running daemon. It owns messaging connections, accepts client and node connections, exposes a typed WebSocket API, validates requests against schemas, emits events, and supervises the local control plane. In the OpenClaw documentation, a single Gateway owns the messaging surfaces for a host, while control clients such as the macOS app, CLI, web UI, and automations connect to it.\footnote{The Gateway architecture page states that the Gateway owns messaging surfaces, exposes a typed WebSocket API, validates inbound frames, emits events, and supports a default local bind host and port. See \url{https://docs.openclaw.ai/concepts/architecture}.}
+
+This is important because it separates the agent from the interface. In a LangGraph application, the web app or API server often calls the graph directly. In OpenClaw, the Gateway is the hub. The agent can be reached from multiple surfaces without each surface implementing its own agent runtime.
+
+\subsection{Channels}
+
+Channels are communication surfaces: Slack, Telegram, WhatsApp, Discord, Signal, iMessage, Teams, WebChat, or other interfaces. This makes OpenClaw feel more like a personal assistant than a backend service. The user does not need to open the agent's custom app; the agent can live where the user already communicates.
+
+This design creates a powerful product advantage, but it also creates risk. A channel is both an input surface and a possible exfiltration surface. If the same agent can read files and send messages, prompt injection becomes materially more dangerous. Therefore a claw needs stricter permission separation than a simple Q\&A chatbot.
+
+\subsection{Agent runtime and loop}
+
+The runtime manages the agent's reasoning loop: receive a message, assemble context, call the model, parse tool calls, execute tools, append observations, continue or stop. Conceptually this is the same ReAct loop introduced earlier in the book, but OpenClaw places it inside a persistent system with sessions, channels, tools, and device capabilities.
+
+The implication is that the agent loop is not a single function. It is an operating process. It must survive malformed messages, duplicate requests, channel delays, tool errors, model failures, restarts, and human interruptions.
+
+\subsection{Tools, skills, and plugins}
+
+OpenClaw distinguishes tools, skills, and plugins. Its documentation describes tools as typed functions the agent can invoke, skills as markdown guidance that teaches the agent when and how to use capabilities, and plugins as packages that can register channels, providers, tools, skills, speech, media, or other capabilities.\footnote{OpenClaw Tools and Plugins documentation: \url{https://docs.openclaw.ai/tools}.}
+
+This three-part distinction is useful for the architecture in this book:
+
+\begin{itemize}[leftmargin=*]
+  \item a \textbf{tool} is operational capability;
+  \item a \textbf{skill} is procedural knowledge about how to perform a workflow;
+  \item a \textbf{plugin} is a distribution unit that packages capabilities and configuration.
+\end{itemize}
+
+This is why we moved skills into the Memory and Knowledge Layer. A skill is not the action itself; it is knowledge that improves action. The action is the tool call.
+
+\subsection{Workspace, memory, and context engine}
+
+A claw needs a workspace: a place for files, scratchpads, generated artifacts, state, and working documents. It also needs a context engine because a long-running agent cannot pass every prior message and file into every model call. The context engine decides what to retrieve, summarize, prune, compact, or omit.
+
+This is the same problem as agent memory, but with a sharper operational constraint. A personal claw may run for weeks. Without pruning and compaction, sessions become expensive and unreliable. Without careful retrieval, the agent forgets important facts. Without boundaries, it may mix contexts between users, channels, or tasks.
+
+\section{OpenClaw setup and operating model}
+
+The OpenClaw getting-started flow installs the system, runs onboarding, verifies the Gateway, opens a dashboard, and sends a first message. The recommended CLI onboarding path is \texttt{openclaw onboard --install-daemon}; the Gateway listens on a local port by default, and the dashboard is used as a control UI.\footnote{OpenClaw Getting Started describes installing OpenClaw, running \texttt{openclaw onboard --install-daemon}, verifying \texttt{openclaw gateway status}, opening \texttt{openclaw dashboard}, and sending a first message. See \url{https://docs.openclaw.ai/start/getting-started}. The GitHub README also recommends \texttt{openclaw onboard --install-daemon}. See \url{https://github.com/openclaw/openclaw}.}
+
+For an educational book, the important lesson is not the exact commands. The important lesson is the operating model:
+
+\begin{enumerate}[leftmargin=*]
+  \item install a persistent runtime;
+  \item configure model provider credentials;
+  \item configure a Gateway;
+  \item connect channels and clients;
+  \item define tools, skills, and plugins;
+  \item restrict permissions with profiles and allow/deny lists;
+  \item run sessions through the agent loop;
+  \item monitor, prune, and update the system over time.
+\end{enumerate}
+
+This is different from building a single LangGraph app. LangGraph gives you the graph abstraction. OpenClaw gives you a personal-agent operating envelope.
+
+\section{Built-in capability surface}
+
+OpenClaw's tool documentation lists built-in capabilities such as shell execution, sandboxed Python analysis, browser control, web search/fetch, file read/write/edit, patch application, message sending, canvas, paired nodes/devices, scheduled jobs, gateway operations, image generation/analysis, text-to-speech, session management, and sub-agent orchestration.\footnote{OpenClaw Tools and Plugins documentation lists built-in tools and tool groups. See \url{https://docs.openclaw.ai/tools}.}
+
+This breadth is what makes claws powerful and dangerous. A customer-support LangGraph agent might have five curated tools. A personal OpenClaw instance may have tools that can browse, write files, send messages, run code, call sub-agents, and operate across devices. The risk profile changes from \emph{answer quality} to \emph{system authority}.
+
+A useful rule is:
+
+\begin{quote}
+The more surfaces an agent can touch, the more its architecture must look like an operating system and less like a prompt template.
+\end{quote}
+
+\section{Tool profiles and permissioning}
+
+OpenClaw supports allow lists, deny lists, tool profiles, and tool groups. For example, its documentation describes profiles such as \texttt{full}, \texttt{coding}, \texttt{messaging}, and \texttt{minimal}; it also describes groups such as runtime, filesystem, sessions, memory, web, UI, automation, messaging, nodes, agents, and media. Deny rules override allow rules.\footnote{OpenClaw Tools and Plugins documentation, sections on allow/deny lists, tool profiles, and tool groups: \url{https://docs.openclaw.ai/tools}.}
+
+This is exactly the security lesson from the four-layer architecture. The Action Layer should never be a flat list of everything the model might call. Tools must be scoped by task, user, channel, model provider, session, and risk level.
+
+For example:
+
+\begin{longtable}{p{0.22\textwidth}p{0.32\textwidth}p{0.32\textwidth}}
+\toprule
+\textbf{Profile} & \textbf{Good for} & \textbf{Risk} \\
+\midrule
+Minimal & Status, simple chat, diagnostics & Low usefulness if over-restricted \\
+Messaging & Chat-channel assistant & Exfiltration through messages \\
+Coding & Repository work, local development & File changes, command execution \\
+Full & Trusted personal operator & Excessive authority; hard to audit \\
+\bottomrule
+\end{longtable}
+
+The lesson is not that every agent needs OpenClaw's exact profiles. The lesson is that production agents need capability profiles. A financial trading agent, a research assistant, a coding agent, and a customer-support agent should not share one unrestricted tool policy.
+
+\section{Pairing, identity, and local trust}
+
+OpenClaw's architecture documentation describes device identities, pairing approval, auth tokens, challenge signing, and different modes for loopback, tailnet, LAN, and remote access. It also notes that idempotency keys are required for side-effecting methods so retries are safe.\footnote{OpenClaw Gateway architecture, wire protocol and pairing sections: \url{https://docs.openclaw.ai/concepts/architecture}.}
+
+This is a major difference from many agent tutorials. In tutorials, tools are just Python functions. In a claw, tools may operate on a real user's device and real communication channels. Therefore the system must answer:
+
+\begin{itemize}[leftmargin=*]
+  \item Which device is connecting?
+  \item Which user approved it?
+  \item Which channel did this request arrive from?
+  \item Which tools are allowed in this context?
+  \item Is the request duplicate or a retry?
+  \item Can the operation be safely repeated?
+  \item Should a human approve before execution?
+\end{itemize}
+
+Idempotency matters because persistent systems retry. If the agent sends a message, charges a card, deletes a file, or opens a pull request, duplicated execution is not harmless. A graph-based agent should learn from this: side-effecting nodes should include idempotency keys, dedupe records, and audit logs.
+
+\section{How OpenClaw differs from our LangGraph implementation}
+
+The LangGraph implementation in the previous application section is an explicit workflow for one application. It is ideal when the developer knows the business process, wants deterministic routing, and needs evaluation-friendly traces. OpenClaw is more like a general-purpose personal-agent runtime. It is ideal when the agent must live across channels, devices, and ongoing tasks.
+
+\begin{longtable}{p{0.23\textwidth}p{0.32\textwidth}p{0.32\textwidth}}
+\toprule
+\textbf{Dimension} & \textbf{LangGraph implementation} & \textbf{OpenClaw-style claw} \\
+\midrule
+Primary abstraction & Graph: state, nodes, edges & Runtime: gateway, sessions, channels, tools, workspace \\
+Typical lifetime & One request or workflow run, possibly durable & Long-running assistant across sessions and channels \\
+Control flow & Developer-defined explicit graph & Agent loop plus runtime policies and tools \\
+Deployment shape & App/API service, cloud runtime, batch worker & Local or remote Gateway daemon with clients/nodes \\
+Tools & Curated application tools & Broad personal/operator tool surface \\
+Memory & Designed per application & Persistent sessions, pruning, workspace/context engine \\
+Human interaction & Checkpoints inside the graph & Chat channels, dashboard, approvals, pairing \\
+Best use case & Production business workflow & Personal/organizational operator assistant \\
+Main risk & Wrong routing or wrong tool call & Over-authorized persistent agent across many surfaces \\
+\bottomrule
+\end{longtable}
+
+This comparison also explains why both can coexist. A claw can call a LangGraph application as a tool. A LangGraph application can call an OpenClaw agent or a coding agent as a stochastic sub-tool. The integration pattern should be contractual: pass a scoped task, budget, permissions, and expected output schema; record the sub-agent trace; validate the result before trusting it.
+
+\section{Agent as a tool}
+
+The earlier Action Layer noted that tools can be stochastic. OpenClaw makes that concrete. A tool may be another model call, another agent, a long-running task, or a coding harness. The output is not guaranteed by pure code; it is generated by an agentic process.
+
+Agent-as-tool requires a stronger contract than deterministic tools:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Input contract:} exact task, scope, allowed files/systems, time and token budget.
+  \item \textbf{Output contract:} schema, citations, diffs, tests run, confidence, unresolved questions.
+  \item \textbf{Authority contract:} what the sub-agent may read, write, execute, send, or modify.
+  \item \textbf{Trace contract:} parent trace ID, child trace ID, tool calls, cost, errors.
+  \item \textbf{Verification contract:} how the parent validates the returned artifact.
+\end{itemize}
+
+For example, if a LangGraph research agent delegates to an OpenClaw web-research claw, the claw should not be allowed to send messages or edit local files. If a personal OpenClaw assistant delegates to a LangGraph deployment workflow, the LangGraph workflow should pause at a human approval node before changing infrastructure.
+
+\section{When to use a claw}
+
+A claw is appropriate when the system must be persistent, multi-surface, and operator-like.
+
+Use a claw when:
+
+\begin{itemize}[leftmargin=*]
+  \item the user wants an assistant reachable through everyday channels;
+  \item the agent needs scheduled or background tasks;
+  \item the agent works across files, browser, shell, messages, and devices;
+  \item the task environment is open-ended and changes over time;
+  \item the user accepts a trusted personal-agent boundary;
+  \item the agent benefits from a workspace and long-term memory.
+\end{itemize}
+
+Do not use a claw when:
+
+\begin{itemize}[leftmargin=*]
+  \item a single API endpoint solves the problem;
+  \item the workflow must be fully deterministic;
+  \item permissions cannot be safely scoped;
+  \item the organization cannot audit agent actions;
+  \item the agent would process sensitive data without governance;
+  \item the user does not need persistent cross-channel presence.
+\end{itemize}
+
+\section{Design lessons from OpenClaw}
+
+The deepest lesson from OpenClaw is that advanced agents are not only model problems. They are infrastructure problems. Once the agent can act across channels and devices, the hard questions become engineering questions:
+
+\begin{enumerate}[leftmargin=*]
+  \item How does the agent receive events?
+  \item How does it authenticate clients and devices?
+  \item How does it scope tools by user, channel, and task?
+  \item How does it preserve useful context without leaking unrelated context?
+  \item How does it retry without duplicating side effects?
+  \item How does it survive restarts?
+  \item How does it expose a human approval path?
+  \item How does it record enough trace data to debug failures?
+\end{enumerate}
+
+This is why claws belong after the application section. The LangGraph and Langfuse chapters show how to build and evaluate one explicit agentic application. The claw chapter shows what happens when the agent becomes an always-available operator embedded in the user's digital environment.
+
+\section{Summary}
+
+A claw is a persistent, operator-like agent. OpenClaw demonstrates this pattern through a Gateway, channels, clients, device nodes, sessions, tools, skills, plugins, workspaces, permissions, and a long-running agent loop. Compared with our LangGraph implementation, OpenClaw is less about encoding one workflow as a graph and more about providing the operating harness for a personal or organizational agent. The two approaches are complementary: LangGraph gives explicit control over a workflow; OpenClaw gives persistent presence and broad capability surfaces. The engineering challenge is to combine them without creating an over-authorized, under-evaluated autonomous system.

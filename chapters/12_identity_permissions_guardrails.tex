@@ -1,0 +1,79 @@
+\chapter{Identity, Permissions, and Guardrails}
+
+Identity and permissions determine what an agent may know and do. Guardrails determine which model outputs or tool calls are acceptable. These controls must live outside the model. A model may help interpret intent, but it should not be the final authority on authorization.
+
+\section{Identity for users, agents, and tools}
+
+Every request should be associated with an identity. The identity may be a human user, service account, tenant, organization, agent, or tool. In multi-agent systems, the agent itself may also have an identity so that downstream tools can distinguish between a human direct request and an automated action.
+
+Identity supports:
+
+\begin{itemize}[leftmargin=*]
+  \item access control;
+  \item audit logs;
+  \item memory isolation;
+  \item tool authorization;
+  \item billing and cost attribution;
+  \item personalization;
+  \item accountability.
+\end{itemize}
+
+\section{Authentication and authorization}
+
+Authentication proves who is calling. Authorization decides what the caller can do. Agents need both inbound and outbound authorization.
+
+\begin{description}[leftmargin=*]
+  \item[Inbound authentication.] The runtime verifies the user or client calling the agent.
+  \item[Tool authorization.] Before executing a tool, the platform checks whether the authenticated identity may use it.
+  \item[Outbound credentials.] If a tool needs to call another service, credentials should be scoped, rotated, and hidden from the model.
+\end{description}
+
+A safe pattern is to pass identity claims to the tool runtime, not to the model as raw secrets. The model can know that the user is in a role; it should not see OAuth tokens, API keys, or database passwords.
+
+\section{Permission scoping}
+
+Permissions should be scoped along several axes:
+
+\begin{itemize}[leftmargin=*]
+  \item user or tenant;
+  \item data source;
+  \item tool;
+  \item action type;
+  \item environment, such as staging versus production;
+  \item time window;
+  \item budget;
+  \item approval requirement.
+\end{itemize}
+
+For example, a deployment agent may be allowed to run tests in any branch, deploy to staging after automatic checks, and deploy to production only after approval from an authorized engineer.
+
+\section{Guardrail types}
+
+Guardrails can be implemented at several points.
+
+\begin{longtable}{p{0.25\textwidth}p{0.35\textwidth}p{0.28\textwidth}}
+\toprule
+\textbf{Guardrail} & \textbf{Purpose} & \textbf{Example} \\
+\midrule
+Input guardrail & detect unsafe or unsupported requests & block credential theft request \\
+Retrieval guardrail & restrict accessible documents & tenant-specific index filter \\
+Tool guardrail & validate tool call before execution & disallow external email with secret \\
+Output guardrail & check final response & redact personal data \\
+Policy guardrail & enforce business rules & require approval above cost threshold \\
+Runtime guardrail & limit execution environment & sandbox shell and network \\
+\bottomrule
+\end{longtable}
+
+\section{Secrets management}
+
+The model should never see secrets. Tool credentials should be stored in a secrets manager or identity service and injected into tool execution environments only when authorized. Logs should redact secrets. Tool errors should not print tokens or connection strings. Retrieved documents should be scanned for accidental secret exposure when possible.
+
+\section{Memory permissions}
+
+Memory must be permissioned like any other data source. A user should not retrieve another user's preferences. A support agent should not store sensitive personal facts unless policy allows. A memory entry should include source, timestamp, confidence, and deletion policy.
+
+Memory also needs correction. If a user says ``do not remember that'' or ``that is wrong,'' the system should update or delete the memory. Memory governance becomes more important as agents become personal and long-lived.
+
+\section{Summary}
+
+Identity tells the system who is acting. Permissions tell it what they may access and do. Guardrails enforce boundaries before and after model calls. For production agents, these controls must be external, auditable, and tied to traces.

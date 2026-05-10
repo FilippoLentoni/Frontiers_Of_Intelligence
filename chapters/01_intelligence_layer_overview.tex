@@ -1,0 +1,33 @@
+\chapter{The Anatomy of an Agentic AI System}
+
+This book is organized around a simple idea: an agentic AI system is not only a foundation model. It is an architecture that combines a model, tools, memory, security controls, evaluation loops, deployment infrastructure, and human oversight. The foundation model provides the core intelligence, but the system becomes useful only when that intelligence is connected to context, actions, feedback, and governance.
+
+We will describe this architecture as the anatomy of an agent. The anatomy has four main layers: the intelligence layer, the action layer, the memory and knowledge layer, and the security layer. These layers are conceptually separate, but in production they interact continuously. The model reasons over context, decides whether to use tools, retrieves or updates memory, and operates within security boundaries. Evaluation and observability then measure whether the full system behaves correctly.
+
+\section{The Four Layers of an Agent}
+
+The first layer is the \emph{intelligence layer}. In this book, the intelligence layer refers to the foundation model: GPT, Claude, Gemini, Llama, Mistral, Qwen, DeepSeek, or any other model that provides the core reasoning and generation capability. The next chapter explains how these models work, starting from the Transformer architecture and then moving toward modern frontier models.
+
+The second layer is the \emph{action layer}. This is the layer that allows the agent to do things beyond generating text. It includes function calling, APIs, tools, MCP servers, browser automation, code execution, and agent-as-a-tool patterns. Some tools are deterministic, such as a calculator, database query, or inventory lookup. Other tools can be stochastic, such as another agent that performs research, writes code, or produces a judgment. The action layer is what turns a model from a conversational system into an operational system.
+
+The third layer is the \emph{memory and knowledge layer}. This layer determines what the agent knows at runtime. It includes short-term conversation state, long-term user or business memory, retrieval-augmented generation, knowledge bases, documents, vector stores, prompt/context engineering, and reusable skills. In this book, skills are treated as a form of procedural knowledge: reusable instructions or patterns that help the agent perform a task more reliably. This layer is critical because most enterprise agents fail not because the model is incapable, but because the right context is missing, stale, too large, or poorly structured.
+
+The fourth layer is the \emph{security layer}. Once an agent can access tools, retrieve data, remember information, and take actions, security becomes part of the architecture rather than an afterthought. The security layer includes identity, authentication, authorization, permission boundaries, guardrails, human approval, audit logs, sandboxing, secret management, and protection against prompt injection or data exfiltration. The more powerful the agent, the more important this layer becomes.
+
+\section{From Anatomy to Implementation}
+
+After introducing the anatomy of an agent, the book moves from concepts to implementation. We first build the conceptual foundation: how foundation models work, how they are trained, how they reason, and how they connect to external systems. We then explain the action layer, the memory and knowledge layer, and the security layer in more detail.
+
+The application section shows how these ideas come together in an end-to-end system. We build an agent using LangGraph, connect it to tools and memory, evaluate it with Langfuse, and close the loop between offline evaluation, production traces, human feedback, and future evaluation datasets. The purpose is not only to show how to build a demo, but to show how to build an agent that can be tested, monitored, improved, and deployed through a production pipeline.
+
+The book then expands beyond a single implementation pattern. We discuss AI claws and OpenClaw as a broader operating model for persistent, tool-using agents. We also study coding agents, including how they read repositories, modify code, run tests, use instructions such as \texttt{AGENTS.md}, and operate inside sandboxed development environments.
+
+Finally, the book turns to economics and organizations. Tokens are the economic unit of AI systems, but tokens are backed by accelerator time, electricity, chips, memory, networking, cooling, and data-center capacity. This means that agentic AI is not only a software shift; it is also an infrastructure and supply-chain shift. The final chapters examine token economics, energy, chip supply chains, limits, risks, and the organizational model required to build an AI-first company.
+
+\section{The Main Argument of the Book}
+
+The central argument of this book is that agentic AI should be understood as a production architecture, not as a prompt wrapped around a model. The model is essential, but it is only one part of the system. A reliable agent requires carefully designed context, well-scoped tools, explicit memory policies, security controls, evaluation datasets, feedback loops, and deployment discipline.
+
+This perspective also changes how we think about automation. In traditional software, humans define rules and software executes them. In agentic systems, humans define goals, constraints, evaluation criteria, and approval boundaries, while the agent performs parts of the reasoning and execution. This does not remove humans from the system. It changes their role. Humans increasingly become designers of context, supervisors of outcomes, reviewers of failures, and managers of intelligent workflows.
+
+The rest of the book develops this argument layer by layer. We begin with the intelligence layer: the foundation model.

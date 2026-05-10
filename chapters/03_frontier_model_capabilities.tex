@@ -1,0 +1,77 @@
+\chapter{Frontier Model Capabilities}
+
+A frontier model is a model near the leading edge of capability at a given moment. The term does not simply mean ``large.'' It means that the model sits near the current frontier across one or more important dimensions: reasoning, coding, tool use, multimodality, long-context understanding, instruction following, safety behavior, latency, and deployment maturity.
+
+For agent builders, frontier models matter because they determine which workflows can be automated with acceptable reliability. A weak model may be useful for extraction, classification, or summarization, but it may fail to maintain a multi-step plan, interpret a failing test suite, or repair a tool call after an error. Stronger models expand the feasible design space.
+
+\section{Open source, open weight, and closed models}
+
+The model ecosystem is often described as a competition between open and closed models, but the terminology needs care.
+
+\begin{description}[leftmargin=*]
+  \item[Closed or proprietary models.] The model weights are not released. Users access the model through an API or hosted product. The provider controls serving, safety behavior, updates, and pricing.
+  \item[Open-weight models.] The weights are released, often with a license that may or may not satisfy the strict definition of open source. Users can inspect, host, quantize, and sometimes fine-tune the model.
+\end{description}
+
+This distinction matters operationally. Closed models are often the easiest way to access frontier capability. Open-weight models offer control, privacy, cost optimization, and customization, but require infrastructure and careful license review. A company may use both: a closed model for the hardest reasoning path and an open-weight model for high-volume internal workflows.
+
+\section{SWE-bench as a frontier coding signal}
+
+SWE-bench evaluates whether systems can solve real GitHub issues by modifying code and passing tests. SWE-bench Verified is a human-validated subset of 500 instances designed to make evaluation more reliable. The official SWE-bench Verified page emphasizes that the full leaderboard includes many kinds of coding systems, while the mini-SWE-agent setting is intended to compare language models under a more standardized bash-only agent loop.\footnote{SWE-bench Verified overview: \url{https://www.swebench.com/verified.html}.}
+
+This distinction is critical. A leaderboard result is not only a model result. It is a model plus scaffold, prompt, tool environment, retry policy, cost limit, and evaluation version. A weaker model with a highly optimized scaffold can beat a stronger model in a poor scaffold. For book purposes, the correct lesson is not ``memorize the top score.'' The correct lesson is ``compare models inside the workflow you intend to deploy.''
+
+\section{Architecture 1: the original Transformer}
+
+The base architecture worth understanding is the original Transformer. It had an encoder, a decoder, multi-head attention, feedforward networks, residual connections, normalization, and positional encodings. The encoder processed the input sequence with full self-attention. The decoder generated output using masked self-attention and cross-attention over encoder states.
+
+The original design was not created specifically for chat agents. It was designed for sequence-to-sequence tasks such as translation. Nevertheless, it introduced the mechanism that made modern LLMs possible: attention as direct content-dependent communication between tokens.
+
+The original architecture can be summarized as:
+
+\begin{enumerate}[leftmargin=*]
+  \item tokenize input;
+  \item embed tokens and positions;
+  \item repeatedly apply attention and feedforward blocks;
+  \item decode output autoregressively;
+  \item train with cross-entropy on target tokens.
+\end{enumerate}
+
+The important insight is that attention separates \emph{where to look} from \emph{what to aggregate}. Queries and keys determine relevance; values carry content. This is the modeling primitive that lets a later token use an earlier definition, a code function use its call site, or a question attend to an answer span.
+
+\section{Architecture 2: a modern frontier decoder}
+
+Modern frontier LLMs are usually decoder-only, but the internal block has changed substantially. Providers do not always disclose full architectures, so the following is a representative open-weight frontier pattern rather than a claim about every closed model.
+
+A modern block often contains:
+
+\begin{itemize}[leftmargin=*]
+  \item causal self-attention instead of encoder-decoder cross-attention;
+  \item rotary or relative positional representations rather than simple absolute position embeddings;
+  \item pre-normalization and RMSNorm-like normalization for training stability;
+  \item grouped-query or multi-query attention to reduce KV-cache memory;
+  \item SwiGLU or related gated feedforward networks;
+  \item FlashAttention-style kernels to reduce memory movement;
+  \item sparse mixture-of-experts feedforward layers in some models;
+  \item long-context training and inference optimizations;
+  \item multimodal adapters or encoders when the model accepts images, audio, or video.
+\end{itemize}
+
+\section{How modeling evolved over time}
+
+The evolution can be read as a movement from representations, to generation, to agents.
+
+\begin{description}[leftmargin=*]
+  \item[Representation era.] Encoder-only models such as BERT produced strong contextual embeddings for classification, extraction, and ranking. They were not general assistants, but they showed the power of bidirectional Transformer representations.
+  \item[Text-to-text era.] Encoder-decoder models such as T5 reframed tasks as text-in/text-out. This unified translation, summarization, question answering, and classification under one interface.
+  \item[Autoregressive scaling era.] Decoder-only models showed that next-token prediction on massive corpora could produce broad capabilities. Scaling data, parameters, and compute became a dominant path.
+  \item[Instruction-following era.] SFT and preference tuning turned base models into assistants. The model was no longer just continuing text; it was following human instructions.
+  \item[Reasoning era.] Models began to allocate more inference-time compute to difficult tasks, often trained with verifiable rewards in math, code, and tool settings.
+  \item[Agentic era.] Models are optimized to call tools, use long context, manage state, and operate inside loops with external feedback.
+\end{description}
+
+This history explains why agentic AI is not a separate field from language modeling. Agents are the next systems layer built on top of the modeling stack.
+
+\section{Summary}
+
+Frontier models are the capability substrate of agentic systems. The original Transformer introduced attention; modern frontier decoders add long-context mechanisms, efficiency improvements, MoE, post-training, reasoning, tool use, and multimodality. Model selection should be based on a capability profile and evaluated inside the actual agent workflow, not only by isolated benchmark numbers.

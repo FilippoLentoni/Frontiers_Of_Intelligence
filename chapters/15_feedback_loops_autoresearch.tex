@@ -1,0 +1,111 @@
+\chapter{Feedback Loops and the Auto-Research Agent}
+
+A production agent should improve through feedback. The loop is not automatic magic; it is an engineering system that converts traces into labeled failures, labeled failures into datasets, datasets into experiments, and experiments into safer deployments. This chapter uses an auto-research agent as the case study because research workflows naturally combine retrieval, web search, note-taking, citation checking, memory, and human review.
+
+\section{The feedback loop}
+
+A practical loop is:
+
+\begin{enumerate}[leftmargin=*]
+  \item collect traces from production or testing;
+  \item sample failures and uncertain cases;
+  \item label failure modes;
+  \item add representative cases to datasets;
+  \item improve prompts, skills, tools, retrieval, model routing, or policies;
+  \item rerun offline evaluation;
+  \item deploy if quality and cost gates pass;
+  \item monitor online metrics;
+  \item repeat.
+\end{enumerate}
+
+The loop is valuable because agent failures are often systemic. A bad final answer may be caused by retrieval, tool schema ambiguity, missing memory, excessive context, wrong model routing, or a weak prompt. Trace-based failure analysis reveals which lever to pull.
+
+\section{Auto-research workflow}
+
+An auto-research agent receives a research question and produces a cited brief or note. A robust workflow is:
+
+\begin{enumerate}[leftmargin=*]
+  \item clarify the research question and scope;
+  \item search internal knowledge and notes;
+  \item search external sources if allowed;
+  \item collect candidate sources;
+  \item assess source quality;
+  \item extract claims;
+  \item synthesize an answer with citations;
+  \item list uncertainty and open questions;
+  \item save a structured note to Obsidian or another knowledge base;
+  \item request human review when confidence is low or claims are high impact.
+\end{enumerate}
+
+This workflow touches every layer. The intelligence layer plans and synthesizes. The action layer searches, fetches, and writes notes. The knowledge layer retrieves and stores. The security layer controls which sources and sinks are allowed.
+
+\section{Trace-to-dataset conversion}
+
+The most important feedback practice is to convert real failures into durable test cases. For an auto-research agent, a dataset item might contain:
+
+\begin{itemize}[leftmargin=*]
+  \item original research question;
+  \item allowed source types;
+  \item required citation format;
+  \item known relevant sources;
+  \item claims that must be included;
+  \item claims that must not be made;
+  \item expected note structure;
+  \item scoring rubric.
+\end{itemize}
+
+A vague user complaint like ``the answer was bad'' must be transformed into a specific failure label: missing source, unsupported claim, stale source, wrong level of detail, citation mismatch, or hallucinated comparison.
+
+\section{Human feedback}
+
+Human feedback can enter at several points:
+
+\begin{description}[leftmargin=*]
+  \item[End-user feedback.] Thumbs up/down, correction, or satisfaction score.
+  \item[Reviewer annotation.] Expert labels on factuality, completeness, and source quality.
+  \item[Approval decisions.] Accept/reject proposed actions or saved notes.
+  \item[Edit distance.] Compare generated note to human-edited final version.
+\end{description}
+
+The most useful feedback is structured. Instead of only thumbs down, ask the reviewer to choose a failure mode and optionally write a correction. This creates training and evaluation data.
+
+\section{Improvement levers}
+
+A feedback loop should map failure types to fixes.
+
+\begin{longtable}{p{0.30\textwidth}p{0.55\textwidth}}
+\toprule
+\textbf{Failure} & \textbf{Likely fix} \\
+\midrule
+Missing key source & improve retrieval query expansion or source catalog \\
+Unsupported claim & add citation checking and claim decomposition \\
+Too verbose & adjust synthesis skill and output schema \\
+Wrong tool & improve tool descriptions or router dataset \\
+Stale information & add freshness filters or web retrieval policy \\
+Unsafe data flow & strengthen source/sink policy checks \\
+Repeated search loop & add stop condition and budget \\
+Weak note structure & add procedural skill and note template \\
+\bottomrule
+\end{longtable}
+
+This mapping prevents random prompt tinkering. The team should change the part of the system that caused the failure.
+
+\section{Self-improvement boundaries}
+
+The term self-improving agent can be misleading. An agent can collect traces, propose prompt edits, suggest new eval cases, and draft skill updates. But changes to production prompts, tools, memory policies, or model routing should pass through human review and CI/CD gates.
+
+Safe self-improvement pattern:
+
+\begin{enumerate}[leftmargin=*]
+  \item agent identifies failure cluster;
+  \item agent proposes dataset items and prompt/tool changes;
+  \item human reviews proposed changes;
+  \item offline evals run automatically;
+  \item deployment proceeds only if gates pass.
+\end{enumerate}
+
+The agent can accelerate improvement, but should not silently modify its own production behavior.
+
+\section{Summary}
+
+Feedback loops turn agents into maintained systems. The auto-research agent illustrates the pattern: collect traces, label failures, create datasets, improve the relevant layer, evaluate, deploy, and monitor. The purpose is not autonomous self-modification; it is disciplined continuous improvement.

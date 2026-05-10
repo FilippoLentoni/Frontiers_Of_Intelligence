@@ -1,0 +1,114 @@
+\chapter{The Memory and Knowledge Layer}
+
+The memory and knowledge layer determines what the agent layer knows at the moment of decision. 
+
+\section{Why memory and knowledge are one layer}
+
+Memory and knowledge are different but tightly connected. Memory stores what the system has learned over time: user preferences, past interactions, decisions, failures, and summaries. Knowledge stores external evidence: documents, notes, code, policies, tickets, manuals, and databases. Context engineering decides which pieces of memory and knowledge enter the model context for a given task.
+
+A bad agent often has enough information somewhere, but fails to assemble the right context. It may retrieve irrelevant chunks, omit a critical policy, include too much noise, or forget that a user already specified a preference. The knowledge layer is therefore not passive storage; it is an active selection system.
+
+\section{Types of memory}
+
+\begin{description}[leftmargin=*]
+  \item[Working memory.] The current state of the task: messages, plan, tool outputs, unresolved questions, and active constraints.
+  \item[Short-term memory.] Conversation history within a session. It supports coherence across turns.
+  \item[Episodic memory.] Records of past events: what the user asked, what the agent did, what result occurred.
+  \item[Semantic memory.] Stable facts extracted from interactions or documents: user role, project names, known issues, definitions.
+  \item[Preference memory.] User or organization preferences: tone, format, default tools, preferred workflows.
+  \item[Procedural memory.] Reusable skills, checklists, playbooks, and workflows.
+\end{description}
+
+Procedural memory is where ``skills'' belong in this book. A skill is not part of the model weights and not merely a tool. It is a reusable package of know-how that the system can place in context when the task requires it.
+
+\section{Skills as procedural knowledge}
+
+A skill can be:
+
+\begin{itemize}[leftmargin=*]
+  \item a checklist for performing a task;
+  \item a prompt fragment with domain-specific instructions;
+  \item a repository-specific development guide;
+  \item a troubleshooting playbook;
+  \item an example-driven pattern for a recurring workflow;
+  \item a bundle of tool-use rules and output formats.
+\end{itemize}
+
+For example, a ``SWE-bench patching skill'' might include: inspect failing tests, locate the relevant package, search for similar functions, modify minimally, run targeted tests, then run broader tests. A ``research synthesis skill'' might include: search multiple source types, separate facts from claims, cite sources, note uncertainty, and produce a structured memo.
+
+Skills should be retrieved, versioned, and evaluated. They should not be pasted into every prompt. A skill that is irrelevant becomes noise. A skill that is outdated becomes harmful. This is why skills belong in the knowledge layer: they are content selected by context, not fixed behavior inside the model.
+
+\section{Prompt engineering versus context engineering}
+
+Prompt engineering is the design of instructions. Context engineering is the design of the entire information packet given to the model. A production prompt may contain:
+
+\begin{itemize}[leftmargin=*]
+  \item developer instructions;
+  \item user request;
+  \item task-specific skill;
+  \item retrieved documents;
+  \item memory summaries;
+  \item tool schemas;
+  \item examples;
+  \item policy text;
+  \item output schema;
+  \item previous observations.
+\end{itemize}
+
+The core question is not ``what prompt should I write?'' It is ``what should the model know, in what order, at what level of detail, and with what authority?''
+
+\section{Context compression}
+
+Context windows are finite and expensive. Compression is the process of reducing context while preserving task-relevant information. Techniques include:
+
+\begin{itemize}[leftmargin=*]
+  \item summarizing prior turns;
+  \item retrieving only top-ranked chunks;
+  \item converting verbose tool output into compact fields;
+  
+\end{itemize}
+
+Compression can introduce errors. A summary may omit a critical caveat. A memory extractor may store a temporary preference as a permanent one. A retrieval filter may exclude the right document. Therefore memory and context transformations should be evaluated like model outputs.
+
+\section{Memory write policy}
+
+An agent should not remember everything. Memory writes require policy.
+
+Store information when:
+
+\begin{itemize}[leftmargin=*]
+  \item the user explicitly asks the agent to remember it;
+  \item the fact is stable and useful for future tasks;
+  \item the information improves personalization or continuity;
+  \item the user or organization has consented to storage.
+\end{itemize}
+
+Do not store information when:
+
+\begin{itemize}[leftmargin=*]
+  \item it is sensitive and not needed;
+  \item it is temporary;
+  \item it was inferred with low confidence;
+  \item it came from untrusted content;
+  \item policy requires deletion or non-retention.
+\end{itemize}
+
+The system should support memory inspection and deletion. Users should be able to ask what the agent remembers and correct it.
+
+\section{Knowledge operations}
+
+The knowledge layer performs several operations:
+
+\begin{description}[leftmargin=*]
+  \item[Ingestion.] Convert documents, notes, code, and data into indexed representations.
+  \item[Chunking.] Split content into retrieval units with metadata.
+  \item[Embedding.] Map chunks into vector space.
+  \item[Retrieval.] Select candidate evidence for a query.
+  \item[Context assembly.] Build the final prompt package.
+\end{description}
+
+Each operation is a possible source of failure and should have tests.
+
+\section{Summary}
+
+The memory and knowledge layer is where prompts, skills, context engineering, RAG and long-term memory belong. It is the layer that decides what the model sees. Better models help, but an agent with poor context will still fail. Production agent design is therefore as much knowledge engineering as model engineering.

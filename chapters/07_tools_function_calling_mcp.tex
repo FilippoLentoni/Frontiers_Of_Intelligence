@@ -1,0 +1,93 @@
+\chapter{Tools, Function Calling, and MCP}
+
+Function calling is the mechanism by which a model emits structured arguments for an external capability. MCP, the Model Context Protocol, is a standard way to expose tools, prompts, and resources to model hosts. Together they make the action layer portable: tools can be implemented once and reused across agents, IDEs, desktop applications, and cloud runtimes.
+
+\section{The function-calling loop}
+
+A tool call usually follows this loop:
+
+\begin{enumerate}[leftmargin=*]
+  \item The runtime sends the model the user request plus tool schemas.
+  \item The model decides whether a tool is needed.
+  \item The model emits a structured call: tool name plus JSON arguments.
+  \item The runtime validates the call.
+  \item The tool executes.
+  \item The runtime returns the observation to the model.
+  \item The model synthesizes a final answer or chooses another step.
+\end{enumerate}
+
+The model does not need to know the implementation. It needs a precise external contract. This is why schema design often matters more than prompt prose. A good schema reduces ambiguity before the model ever reasons.
+
+\section{Tool selection and tool routing}
+
+Real systems may expose dozens or hundreds of tools. Passing every full schema to every model call wastes context and can reduce reliability. A common design is a two-stage router.
+
+\begin{enumerate}[leftmargin=*]
+  \item A lightweight router receives the user request and a compact tool catalog.
+  \item It selects a small set of candidate tools.
+  \item The main model receives only those full schemas.
+  \item The main model decides whether and how to call one of them.
+\end{enumerate}
+
+The router should optimize for recall. It is better to include one extra candidate tool than to exclude the necessary one. Precision can be handled by the main model and by validators.
+
+\section{MCP primitives}
+
+The MCP specification defines several primitives. The most important for this book are tools, resources, and prompts.
+
+\begin{description}[leftmargin=*]
+  \item[Tools.] Model-invoked capabilities that interact with external systems, APIs, computations, or actions. The MCP specification describes tools as server-exposed capabilities with names, metadata, and schemas.\footnote{MCP tools specification: \url{https://modelcontextprotocol.io/specification/2025-06-18/server/tools}.}
+  \item[Resources.] Contextual data exposed by a server and selected by the application or client. A resource might be a file, document, database record, or repository item.
+  \item[Prompts.] Reusable prompt templates and workflow packages exposed by a server. The MCP prompt specification describes prompts as structured messages and instructions that clients can discover and retrieve.\footnote{MCP prompts specification: \url{https://modelcontextprotocol.io/specification/2025-06-18/server/prompts}.}
+\end{description}
+
+This distinction helps align MCP with the layers in this book. Tools primarily belong to the action layer. Resources and prompts primarily support the memory and knowledge layer. All three need security boundaries.
+
+\section{Local tools versus remote tools}
+
+Local tools run inside the agent process. They are easy to prototype and debug. Remote tools run behind an API, Lambda function, MCP server, or gateway. They are easier to share, secure, scale, and audit.
+
+\begin{longtable}{p{0.23\textwidth}p{0.34\textwidth}p{0.32\textwidth}}
+\toprule
+\textbf{Aspect} & \textbf{Local tool} & \textbf{Remote/MCP tool} \\
+\midrule
+Setup & simple Python function & server, auth, deployment \\
+Sharing & tied to one agent & reusable across hosts \\
+Security & process-level controls & identity, gateway, network policy \\
+Observability & local logs & centralized traces and metrics \\
+Latency & low & network overhead \\
+Governance & ad hoc & policy and audit friendly \\
+\bottomrule
+\end{longtable}
+
+The practical workflow is: start local, stabilize the schema, write tests, then promote to a remote tool if it must be shared or governed.
+
+\section{Validation before execution}
+
+The runtime should validate tool calls before execution. Validation includes:
+
+\begin{itemize}[leftmargin=*]
+  \item schema validation;
+  \item type checking;
+  \item required argument checking;
+  \item authorization;
+  \item policy constraints;
+  \item rate limits;
+  \item side-effect approval.
+\end{itemize}
+
+The model may propose a tool call, but it should not be the authority on whether the call is allowed. The security layer must enforce that outside the model.
+
+\section{Tool hallucination}
+
+Tool hallucination occurs when the model calls a tool that does not exist, invents unsupported arguments, or assumes a tool returned information it did not return. Mitigations include:
+
+\begin{enumerate}[leftmargin=*]
+  \item observability;
+  \item display the tools used by the model in the UI;
+  \item Ask the model to return a flag linked to the tool utilization (e.g "I have submitted the payment");
+\end{enumerate}
+
+\section{Summary}
+
+Function calling makes model actions structured. MCP makes tools, resources, and prompts portable across systems. Reliable tool use depends on routing, schemas, validation, clear error contracts, and observability. Tools can be deterministic or stochastic; the runtime must manage both through explicit contracts.

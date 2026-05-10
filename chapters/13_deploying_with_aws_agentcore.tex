@@ -1,0 +1,96 @@
+\chapter{Deploying Agents and Tools with AWS AgentCore}
+
+After the agent works locally, the next challenge is deployment. Production agents need runtime isolation, authentication, memory, tool gateways, tracing, metrics, and scaling. Amazon Bedrock AgentCore is one managed platform for this style of deployment. AWS describes AgentCore as an agentic platform for building, deploying, and operating agents securely at scale using any framework and foundation model.\footnote{Amazon Bedrock AgentCore overview: \url{https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html}.}
+
+\section{Deployment target}
+
+A deployed agent should expose a simple interface:
+
+\begin{lstlisting}[language=json]
+{
+  "prompt": "What is the return policy for my laptop?",
+  "session_id": "...",
+  "user_id": "..."
+}
+\end{lstlisting}
+
+Behind that interface, the runtime must reconstruct the graph or agent, load configuration, authenticate the request, attach memory, discover tools, invoke the model, and stream or return the response.
+
+\section{From local tools to shared tools}
+
+A local prototype begins with local tools. This is the right place to start because it keeps iteration fast. Once the tool schema stabilizes, tools that need sharing or governance should be moved behind a gateway.
+
+AWS AgentCore Gateway is described as a way to build, deploy, discover, and connect to tools at scale, including converting APIs, Lambda functions, and existing services into MCP-compatible tools.\footnote{AgentCore Gateway documentation: \url{https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html}.} The general pattern is:
+
+\begin{enumerate}[leftmargin=*]
+  \item implement backend capability, such as Lambda or API;
+  \item define tool schema;
+  \item attach the backend as a gateway target;
+  \item protect the gateway with identity;
+  \item let agents discover tools through MCP.
+\end{enumerate}
+
+The benefit is not only reuse. It is centralized permissioning, logging, and versioning.
+
+\section{Memory in deployment}
+
+AgentCore Memory provides managed short-term and long-term memory for agents. AWS describes it as supporting conversation context and long-term knowledge retention.\footnote{AgentCore Memory documentation: \url{https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html}.}
+
+A deployed agent should not store raw conversation history indefinitely by default. It should apply a memory write policy: what to store, where to store it, under which user or actor ID, with what confidence, and for how long. Memory namespaces should be tenant- and user-aware.
+
+\section{Runtime entrypoint}
+
+The runtime entrypoint responsibilities are:
+
+\begin{itemize}[leftmargin=*]
+  \item parse request payload;
+  \item authenticate and extract identity claims;
+  \item load configuration from environment or parameter store;
+  \item initialize model, memory, and tool clients;
+  \item invoke the graph;
+  \item return or stream the response;
+  \item record traces and errors.
+\end{itemize}
+
+A runtime-ready design lets the same graph be tested locally and deployed remotely.
+
+\section{Observability}
+
+Deployment without observability is a demo. A production agent should record:
+
+\begin{itemize}[leftmargin=*]
+  \item request metadata;
+  \item model name and version;
+  \item prompt or prompt version;
+  \item input and output tokens;
+  \item tool calls and arguments;
+  \item tool outputs or redacted summaries;
+  \item latency per node;
+  \item cost per step;
+  \item memory reads and writes;
+  \item safety checks;
+  \item final evaluation scores.
+\end{itemize}
+
+AgentCore Observability and CloudWatch can provide runtime traces and metrics. The design lesson applies to any cloud: traces should reflect the graph and the layers, not only the final model call.
+
+\section{Deployment checklist}
+
+Before production, verify:
+
+\begin{enumerate}[leftmargin=*]
+  \item tool schemas have tests;
+  \item prompts and skills are versioned;
+  \item memory write policy is implemented;
+  \item identity is enforced outside the model;
+  \item high-risk tools require approval;
+  \item traces are captured;
+  \item evaluation datasets exist;
+  \item rollback is possible;
+  \item costs are monitored;
+  \item failure modes are documented.
+\end{enumerate}
+
+\section{Summary}
+
+Cloud deployment turns an agent into an operated system. The important pieces are runtime, gateway, identity, memory, observability, and evaluation. AgentCore is one concrete stack for these concerns, but the architecture is portable: keep local logic testable, expose tools through governed interfaces, enforce identity externally, and trace every consequential decision.

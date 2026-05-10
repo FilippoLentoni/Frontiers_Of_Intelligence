@@ -1,0 +1,90 @@
+\chapter{Foundation models}
+
+Agentic AI begins with a language model, and the modern language model begins with the Transformer. This chapter explains the modeling foundations needed for the rest of the book: how text becomes tokens, how tokens become vectors, how attention builds context, and why decoder-only Transformers became the default architecture for general-purpose assistants.
+
+\section{Tokenization: the first compression step}
+
+A model cannot operate directly on raw strings. Text is converted into tokens: discrete units such as words, subwords, bytes, or characters. Tokenization is not a minor preprocessing detail. It shapes cost, context length, multilingual behavior, and the model's ability to copy exact identifiers.
+
+Word-level tokenization is intuitive but brittle. It creates large vocabularies and maps unseen words to unknown symbols. Character-level tokenization avoids unknown words but produces long sequences. Subword tokenization is the practical compromise used by most language models: common words may be one token, rare words are decomposed into reusable pieces, and identifiers can be represented without requiring every possible string to exist in the vocabulary.
+
+For agents, tokenization has direct engineering consequences. A long legal document, repository, or log file consumes context in tokens, not pages. Code identifiers may split into many tokens. Tool outputs that look small in characters can be expensive if they contain structured data, long URLs, or repeated keys. Token-aware context engineering is therefore a product requirement, not an academic detail.
+
+\section{Embeddings and representation geometry}
+
+After tokenization, each token is mapped to a dense vector called an embedding. A one-hot vector can identify a token, but it cannot express that two tokens are semantically related. Dense embeddings solve this by placing tokens in a learned vector space. Similar meanings, syntactic roles, or usage patterns tend to occupy related regions of that space.
+
+The same idea appears later in retrieval. A document chunk and a query can both be embedded into vectors, and similarity in embedding space can be used to retrieve relevant context. The conceptual bridge is important: both LLMs and RAG systems rely on the idea that meaning can be approximated by geometry.
+
+\section{Why sequence models were not enough}
+
+Before Transformers, recurrent models such as RNNs and LSTMs processed text sequentially. Each token updated a hidden state that carried information forward. This introduced order sensitivity, but it created two constraints. First, long-range dependencies were difficult: information from early tokens could fade or be overwritten. Second, training was hard to parallelize across time because later states depended on earlier states.
+
+Agents often need long-range dependencies: the first paragraph of a contract may define a term used much later; a stack trace may begin with irrelevant frames and end with the real failure; a code patch may require connecting a failing test to a function several files away. Architectures that struggle with long-range context are therefore poorly suited to modern agentic workloads.
+
+\section{Self-attention}
+
+Self-attention lets each token directly compare itself to other tokens in the sequence. For each position, the model constructs three learned projections: a query, a key, and a value. The query represents what the token is looking for; the key represents what another token offers for matching; the value represents the information to aggregate.
+
+Scaled dot-product attention is written as
+
+\[
+\operatorname{Attention}(Q,K,V) = \operatorname{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V.
+\]
+
+The matrix $QK^\top$ contains pairwise relevance scores between query positions and key positions. The softmax converts those scores into weights. Multiplying by $V$ produces a weighted combination of value vectors. The division by $\sqrt{d_k}$ stabilizes the scale of dot products as dimensionality grows.
+
+Multi-head attention repeats this operation with multiple learned projections. A single head might learn local syntax, another might track entities, another might attend to delimiters in code, and another might connect a question to a relevant answer span. Attention maps are not a complete explanation of model behavior, but they give an intuition for how a token representation becomes context-aware.
+
+\section{The original Transformer}
+
+The original Transformer from \emph{Attention Is All You Need} used an encoder-decoder architecture. The encoder processed the source sequence with full self-attention. The decoder generated the target sequence autoregressively, using masked self-attention so that each output position could see only previous output tokens. The decoder also used cross-attention to attend to encoder states.
+
+The architecture introduced several design patterns that remain central:
+
+\begin{enumerate}[leftmargin=*]
+  \item attention sublayers for token-to-token interaction;
+  \item feedforward sublayers for nonlinear transformation at each position;
+  \item residual connections to preserve gradient flow;
+  \item normalization to stabilize training;
+  \item positional information because attention alone is permutation-invariant;
+  \item masking to enforce causal generation.
+\end{enumerate}
+
+This architecture solved two problems at once. It gave every token a direct path to every other token, and it expressed the computation as matrix operations that GPUs can parallelize efficiently.
+
+\section{From encoder-decoder to decoder-only LLMs}
+
+Three Transformer families emerged. Encoder-only models such as BERT are strong representation learners. Encoder-decoder models such as T5 are natural for sequence-to-sequence tasks. Decoder-only models became the dominant architecture for large generative models because their training objective is simple and scalable: predict the next token given the prefix.
+
+Decoder-only models are especially aligned with chat and agent systems. A conversation, a plan, a tool call, a tool result, and a final response can all be serialized into one sequence. The model learns to continue that sequence in the desired format. 
+
+\section{Positional information}
+
+Self-attention needs positional information because the attention operation by itself does not know token order. Early Transformers added absolute positional encodings to token embeddings. Modern LLMs often use relative or rotary methods so position affects the attention scores more directly.
+
+For agentic systems, positional design matters because context windows are large. A model may need to process hundreds of thousands or millions of tokens. Long-context performance depends not only on nominal context length but on whether the model can actually use information far from the current generation point. Long-context systems must be evaluated with realistic tasks: documents, codebases, traces, and multi-turn conversations, not only synthetic ``needle'' tests.
+
+\section{Inference: logits, decoding, and structured output}
+
+At inference time, a decoder-only model produces logits over the vocabulary. Decoding converts these logits into tokens. Greedy decoding chooses the most likely token. Sampling introduces randomness. Temperature, top-$k$, and top-$p$ control how much probability mass is available for sampling.
+
+Structured agent outputs often require more discipline. If a model must produce JSON arguments for a tool call, the system can rely on prompting, retry after invalid output, or constrain generation so only schema-valid tokens are allowed. 
+
+\section{Why this matters for agents}
+
+Every agentic capability is built on these modeling primitives:
+
+\begin{itemize}[leftmargin=*]
+  \item tool calls are generated token sequences;
+  \item retrieved documents are context tokens;
+  \item memory summaries are context tokens;
+  \item plans are intermediate generated text or state updates;
+  \item cost and latency scale with input and output tokens.
+\end{itemize}
+
+Understanding Transformers therefore helps with practical engineering decisions. It explains why long prompts cost money, why irrelevant context can hurt, why structured output may need constraints, why retrieval quality matters, and why a model may fail even when the answer is present somewhere in a long context.
+
+\section{Summary}
+
+Transformers replaced sequential recurrence with parallel self-attention. Decoder-only Transformers became the default for LLMs because next-token prediction scales cleanly and supports open-ended generation. Agents are built by placing this generative engine inside a stateful loop with tools, memory, context, and security boundaries.

@@ -1,0 +1,142 @@
+\chapter{CI/CD and Evaluating}
+
+Evaluation is the mechanism that turns agent development from guesswork into engineering. Langfuse is an open-source LLM engineering platform for tracing, debugging, monitoring, and evaluating LLM applications.\footnote{Langfuse overview: \url{https://langfuse.com/docs}.} This chapter uses Langfuse as the concrete evaluation layer, but the principles apply to any observability and evaluation stack.
+
+\section{What to evaluate}
+
+Agent evaluation must go beyond final answer quality. A single run contains many decisions:
+
+\begin{itemize}[leftmargin=*]
+  \item Did the agent understand the goal?
+  \item Did it retrieve the right evidence?
+  \item Did it select the right tool?
+  \item Were tool arguments valid?
+  \item Did the tool execute successfully?
+  \item Did the agent use the observation correctly?
+  \item Did it respect policy?
+  \item Did it stop at the right time?
+  \item Was the final answer useful, grounded, and concise?
+  \item Was the cost acceptable?
+\end{itemize}
+
+A good evaluation system measures both end-to-end success and step-level failure modes.
+
+\section{Traces}
+
+A trace is a replayable record of an interaction. It should include the user input, model calls, tool calls, retrieved context, observations, final answer, latency, cost, and metadata. Langfuse-style tracing gives teams a way to debug agent behavior rather than reading isolated logs.
+
+Traces should preserve hierarchy. If a parent agent calls a research sub-agent, the trace should show the nested run. If a graph has nodes, each node should be visible. If a tool call fails, the error should be attached to the tool observation.
+
+\section{Scores}
+
+Langfuse uses scores as data objects for evaluation results. Scores can be attached to traces, observations, sessions, or dataset runs, and can come from manual annotations, programmatic checks, SDK/API calls, or LLM-as-a-judge evaluators.\footnote{Langfuse score data model: \url{https://langfuse.com/docs/evaluation/scores/data-model}.}
+
+Useful agent scores include:
+
+\begin{longtable}{p{0.27\textwidth}p{0.58\textwidth}}
+\toprule
+\textbf{Score} & \textbf{Meaning} \\
+\midrule
+Goal success & Did the agent satisfy the user objective? \\
+Correctness & Are factual or computational claims correct? \\
+Grounding & Are claims supported by retrieved evidence or tool outputs? \\
+Tool selection & Did the agent choose the right tools? \\
+Argument validity & Were tool arguments valid and complete? \\
+Observation use & Did the agent incorporate tool results correctly? \\
+Safety compliance & Did the agent respect policy and permissions? \\
+Efficiency & Did the agent solve the task within cost and latency budgets? \\
+\bottomrule
+\end{longtable}
+
+\section{Datasets and experiments}
+
+A dataset is a stable collection of test cases used to evaluate an application. Langfuse datasets can be built from production traces and used for offline experiments.\footnote{Langfuse datasets documentation: \url{https://langfuse.com/docs/evaluation/experiments/datasets}.} This is essential for feedback loops: every important production failure should become a dataset item.
+
+An agent dataset item should include:
+
+\begin{itemize}[leftmargin=*]
+  \item user prompt;
+  \item expected behavior;
+  \item allowed tools;
+  \item forbidden tools or actions;
+  \item reference documents or facts;
+  \item expected final answer shape;
+  \item scoring rubric;
+  \item metadata such as difficulty and risk.
+\end{itemize}
+
+\section{LLM-as-a-judge}
+
+LLM judges are useful for criteria that are hard to score with rules: helpfulness, clarity, policy nuance, groundedness, and answer completeness. But they have biases: verbosity bias, position bias, self-preference, and rubric drift. Mitigations include:
+
+\begin{enumerate}[leftmargin=*]
+  \item use explicit rubrics;
+  \item ask for evidence before score;
+  \item use structured output;
+  \item run at low temperature;
+  \item compare judge scores to human labels;
+  \item use pairwise judging for subjective comparisons;
+  \item use a different or stronger model as judge when possible.
+\end{enumerate}
+
+LLM judges should not replace deterministic checks. If a tool call must match a JSON schema, use a schema validator. If code must work, run tests. If a citation must support a claim, check the citation.
+
+\section{Failure taxonomy}
+
+Langfuse traces become much more useful when failures are labeled. A taxonomy might include:
+
+\begin{itemize}[leftmargin=*]
+  \item intent misunderstanding;
+  \item missing retrieval;
+  \item wrong retrieval;
+  \item wrong tool;
+  \item malformed arguments;
+  \item tool execution failure;
+  \item ignored observation;
+  \item hallucinated fact;
+  \item unsafe action proposed;
+  \item excessive cost;
+  \item premature stop;
+  \item failure to stop.
+\end{itemize}
+
+Langfuse documentation and blog material emphasizes error analysis as a process of gathering traces, surfacing failure patterns, structuring failure modes, and labeling them.\footnote{Langfuse error analysis guide: \url{https://langfuse.com/blog/2025-08-29-error-analysis-to-evaluate-llm-applications}.}
+
+\section{Online versus offline evaluation}
+
+Offline evaluation runs fixed datasets before deployment. Online evaluation samples real production traffic. Offline evaluation catches regressions before release. Online evaluation catches distribution shift, new user behavior, tool failures, and model drift.
+
+A mature system uses both:
+
+\begin{itemize}[leftmargin=*]
+  \item offline evals for CI/CD gates;
+  \item online evals for monitoring;
+  \item human annotation for calibration;
+  \item trace mining for new dataset items;
+  \item dashboards for quality, cost, and latency trends.
+\end{itemize}
+
+
+\section{Reference architecture diagrams}
+
+The two diagrams below make the evaluation architecture concrete. They should be read together: the first diagram shows how evaluation gates attach to the staged deployment pipeline, while the second diagram shows how offline and online evaluation form a closed feedback loop.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/langfuse_cicd_stack.png}
+\caption{CI/CD topology for an agentic system. External tools, the agent container, and the UI can each move through Personal, Alpha, Gamma, and Prod environments. Langfuse evaluation gates are attached to the agent path so that each promotion is checked before it reaches the next environment. The important design point is separation of ownership: tools not owned by the agent team may follow their own CI/CD path, while the agent stack integrates those tools through stable contracts.}
+\label{fig:langfuse-cicd-stack}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/langfuse_eval_feedback_loop.png}
+\caption{Offline and online evaluation loop. Before deployment, the team scopes the business problem, defines labeling criteria and SOPs, creates an evaluation dataset, and runs Langfuse batch stress tests using LLM-as-a-judge and manual triggers. After deployment, production traces are collected in Langfuse, sampled for manual or LLM-assisted audit, converted into quality assessments and improvement insights, and fed back into both the next evaluation dataset and the next version of the agent, tools, or skills.}
+\label{fig:langfuse-eval-feedback-loop}
+\end{figure}
+
+This architecture is intentionally not a single linear pipeline. Agent quality improves through iteration. A failed production trace can create a new labeled example; a new labeled example becomes part of the next offline evaluation dataset; the next dataset becomes a regression gate for the next deployment. The same loop applies to tools and skills: if a failure is caused by a weak tool schema, missing skill, or incorrect prompt instruction, the improvement should be versioned and evaluated before promotion.
+
+\section{Summary}
+
+Agent evaluation is step-level and end-to-end. Langfuse provides traces, scores, datasets, experiments, and annotation workflows that support this process. The goal is to turn each failure into a labeled example, each labeled example into an evaluation, and each evaluation into a deployment gate.

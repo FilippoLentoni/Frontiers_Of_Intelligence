@@ -1,0 +1,264 @@
+\chapter{Coding Agents}
+
+Coding agents are one of the clearest demonstrations of agentic AI because software engineering already has a natural environment for verification. The agent can inspect a repository, edit files, run tests, read failures, modify the patch, run tests again, and propose a pull request. Unlike general open-ended writing, code often has executable feedback. That makes coding agents a bridge between reasoning models, tool use, verification, and autonomous workflows.
+
+This chapter focuses on coding agents as production systems, with OpenAI Codex as a concrete reference point. OpenAI describes Codex as a coding agent that can read, edit, and run code; Codex CLI runs locally from the terminal and can inspect a repository, edit files, and run commands; Codex Web delegates tasks to cloud environments and can work on tasks in the background, including in parallel.\footnote{OpenAI Codex overview: \url{https://developers.openai.com/codex}. Codex CLI documentation: \url{https://developers.openai.com/codex/cli}. Codex Web documentation: \url{https://developers.openai.com/codex/cloud}.}
+
+\section{From code completion to coding agents}
+
+The evolution of AI coding systems has moved through several stages.
+
+\begin{description}[leftmargin=*]
+  \item[Autocomplete.] The model predicts the next line or function from local context.
+  \item[Chat assistant.] The model explains code, generates snippets, and answers questions.
+  \item[Repository assistant.] The model reads multiple files and reasons over project structure.
+  \item[Patch agent.] The model edits files, applies diffs, and runs tests.
+  \item[Software engineering agent.] The model plans, edits, executes, validates, opens pull requests, responds to review feedback, and can delegate subtasks.
+\end{description}
+
+The shift is not only model capability. It is also environment design. A coding agent needs tools: file search, read/write/edit, shell execution, test runners, package managers, linters, type checkers, Git, GitHub, issue trackers, CI logs, and sometimes browsers. The model becomes useful because it is placed inside the feedback loop of software engineering.
+
+\section{The coding-agent loop}
+
+A robust coding agent follows a loop:
+
+\begin{enumerate}[leftmargin=*]
+  \item Understand the task and constraints.
+  \item Inspect repository structure.
+  \item Locate relevant files, tests, and documentation.
+  \item Form a hypothesis about the required change.
+  \item Edit files.
+  \item Run targeted tests or checks.
+  \item Read failures.
+  \item Repair the patch.
+  \item Run broader validation.
+  \item Summarize changes and residual risk.
+\end{enumerate}
+
+This is ReAct applied to code. The observation is not a web snippet; it is a test result, stack trace, compiler error, failing assertion, type-checker output, benchmark result, or reviewer comment. The quality of the agent depends on how well it uses this feedback.
+
+\section{Why coding is special}
+
+Coding tasks have three properties that make them unusually suitable for agents.
+
+\subsection{The environment provides feedback}
+
+The agent can run tests. Tests are not perfect, but they are a concrete signal. A passing test suite is not proof of correctness, but a failing test suite is strong evidence that something is wrong. This makes coding agents more verifiable than agents that write strategy memos or answer ambiguous policy questions.
+
+\subsection{The artifact is inspectable}
+
+The output is a diff. Humans can review it. Static analyzers can check it. CI can run it. Git can revert it. This makes coding agents easier to govern than agents that take irreversible external actions.
+
+\subsection{The work decomposes naturally}
+
+Large engineering tasks can be split: investigate bug, update API, add test, refactor, update docs, review security, check performance. This makes coding agents suitable for sub-agent workflows.
+
+OpenAI's Codex documentation explicitly supports subagents: Codex can spawn specialized agents in parallel and collect their results, which is useful for codebase exploration or multi-step feature plans; the documentation also notes that subagents consume more tokens because each subagent performs its own model and tool work.\footnote{OpenAI Codex subagents documentation: \url{https://developers.openai.com/codex/subagents}.}
+
+\section{OpenAI Codex as a reference architecture}
+
+OpenAI's 2025 Codex announcement described Codex as a cloud-based software engineering agent that can work on multiple tasks in parallel, write features, answer questions about a codebase, fix bugs, and propose pull requests. Each task ran in its own isolated cloud sandbox preloaded with the repository; Codex could read and edit files and run commands such as tests, linters, and type checkers.\footnote{OpenAI, ``Introducing Codex,'' May 16, 2025: \url{https://openai.com/index/introducing-codex/}.}
+
+That architecture contains the essential elements of modern coding agents:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Repository context:} the agent sees the codebase, not only the user's prompt.
+  \item \textbf{Sandbox:} execution occurs in an isolated environment.
+  \item \textbf{Tool access:} the agent can edit files and run commands.
+  \item \textbf{Parallel tasks:} each task can run independently.
+  \item \textbf{PR-oriented output:} the agent proposes changes for human review.
+  \item \textbf{Iterative validation:} the agent can run tests and repair failures.
+\end{itemize}
+
+Codex CLI is the local version of this pattern. It runs from the terminal, can read, change, and run code in the selected directory, and is open source and built in Rust.\footnote{Codex CLI documentation: \url{https://developers.openai.com/codex/cli}. OpenAI Codex GitHub repository: \url{https://github.com/openai/codex}.} Codex Web is the cloud version: it connects to GitHub repositories, runs tasks in cloud environments, and can create pull requests.\footnote{Codex Web documentation: \url{https://developers.openai.com/codex/cloud}.}
+
+\section{Local, cloud, IDE, and agent-as-tool modes}
+
+Coding agents appear in several deployment modes.
+
+\begin{longtable}{p{0.22\textwidth}p{0.34\textwidth}p{0.31\textwidth}}
+\toprule
+\textbf{Mode} & \textbf{Strength} & \textbf{Risk} \\
+\midrule
+Local CLI & Full access to local repo; fast iteration; developer control & Can modify files and run commands on the developer machine \\
+IDE extension & Natural developer workflow; inline context & Risk of silent edits or context overreach \\
+Cloud agent & Isolated environment; parallel tasks; PR output & Environment drift from production or local setup \\
+GitHub issue/PR bot & Natural integration with review process & Must avoid noisy or low-quality PRs \\
+Agent-as-tool & Higher-level planner can delegate code tasks & Parent agent must validate diffs and tests \\
+\bottomrule
+\end{longtable}
+
+The best mode depends on the task. For exploratory debugging, local CLI is useful because the developer can inspect and steer. For background backlog tasks, cloud execution is better. For enterprise usage, PR-based workflows are usually safer than direct pushes.
+
+\section{AGENTS.md as repository memory}
+
+OpenAI's Codex documentation describes \texttt{AGENTS.md} as a way to give Codex extra instructions and context for a project. Codex reads these files before doing work and builds an instruction chain from global and project-specific guidance.\footnote{OpenAI Codex AGENTS.md guide: \url{https://developers.openai.com/codex/guides/agents-md}.}
+
+Architecturally, \texttt{AGENTS.md} is repository-level procedural memory. It can encode:
+
+\begin{itemize}[leftmargin=*]
+  \item how to install dependencies;
+  \item how to run tests;
+  \item which package manager to prefer;
+  \item style conventions;
+  \item review expectations;
+  \item files or generated directories to avoid;
+  \item security-sensitive areas;
+  \item deployment and rollback rules.
+\end{itemize}
+
+This is the same principle as skills in the Memory and Knowledge Layer. The model does not need to rediscover project conventions every time. The repository should carry its own agent instructions.
+
+A good \texttt{AGENTS.md} is short, operational, and tested against real failures. If the agent repeatedly makes the same wrong assumption, update the file. This creates a feedback loop: human review becomes persistent guidance.
+
+\section{Skills, plugins, and progressive disclosure}
+
+OpenAI's Codex skills documentation describes skills as task-specific capabilities packaged with instructions, resources, and optional scripts. A skill has a \texttt{SKILL.md} file and optional directories such as scripts, references, and assets. Codex uses progressive disclosure: it initially sees the skill name, description, and path, and reads the full \texttt{SKILL.md} only when it decides to use the skill.\footnote{OpenAI Codex Agent Skills documentation: \url{https://developers.openai.com/codex/skills}.}
+
+This is a critical design insight. A coding agent cannot load every rule, script, and manual into context at startup. It needs a catalog of possible procedures, then loads the full procedure only when relevant. The same pattern applies beyond coding:
+
+\begin{itemize}[leftmargin=*]
+  \item financial analysis skill;
+  \item security review skill;
+  \item LaTeX build skill;
+  \item data-cleaning skill;
+  \item migration-planning skill;
+  \item incident-response skill.
+\end{itemize}
+
+The cognitive layer chooses the skill; the knowledge layer stores it; the action layer runs any scripts or tools referenced by it; the security layer decides what is allowed.
+
+\section{MCP and coding agents as callable tools}
+
+OpenAI documents a pattern where Codex CLI can be exposed as an MCP server and called from the OpenAI Agents SDK. The server exposes tools such as \texttt{codex()} to start a conversation and \texttt{codex-reply()} to continue one, keeping Codex alive across multiple agent turns.\footnote{OpenAI Codex with Agents SDK guide: \url{https://developers.openai.com/codex/guides/agents-sdk}.}
+
+This is the formal version of agent-as-tool. A higher-level agent can delegate implementation to Codex while it handles product planning, requirements decomposition, or review. For example:
+
+\begin{enumerate}[leftmargin=*]
+  \item Product agent writes a feature brief.
+  \item Architecture agent decomposes the change.
+  \item Codex agent edits the repository.
+  \item Reviewer agent inspects the diff.
+  \item Test agent runs validation.
+  \item Human approves the PR.
+\end{enumerate}
+
+The benefit is specialization. The risk is trace fragmentation and authority confusion. Every delegated agent should return a structured artifact: diff, tests run, files changed, assumptions, unresolved issues, and trace ID.
+
+\section{Security and approvals}
+
+Coding agents operate in a sensitive environment. They can read source code, modify production logic, run commands, install dependencies, access environment variables, and sometimes reach internal services. Security cannot be bolted on later.
+
+OpenAI's Codex Security documentation describes a related product for finding, validating, and remediating likely vulnerabilities in connected GitHub repositories. It scans repositories commit by commit, builds repo-specific context, validates high-signal findings in an isolated environment, and provides suggested fixes for review.\footnote{OpenAI Codex Security documentation: \url{https://developers.openai.com/codex/security}.}
+
+For general coding agents, security controls should include:
+
+\begin{itemize}[leftmargin=*]
+  \item sandboxed execution by default;
+  \item explicit network access policy;
+  \item no secret exposure to model context unless required and approved;
+  \item command allow/deny rules;
+  \item dependency-install approval;
+  \item file-system scope restrictions;
+  \item human approval before destructive operations;
+  \item PR review before merge;
+  \item audit logs for every command and file edit.
+\end{itemize}
+
+OpenAI's Codex rules documentation shows a concrete mechanism for rules files that can prompt before allowing specific commands outside the sandbox, with examples and inline unit-test style matches.\footnote{OpenAI Codex Rules documentation: \url{https://developers.openai.com/codex/rules}.}
+
+\section{Evaluation of coding agents}
+
+Coding agents should be evaluated at several levels.
+
+\subsection{Task success}
+
+Did the agent solve the issue? SWE-bench style evaluation captures this by running tests against real repository issues. But production teams also need internal task suites: representative bugs, migrations, refactors, and feature additions.
+
+\subsection{Patch quality}
+
+A patch can pass tests and still be bad. Evaluate:
+
+\begin{itemize}[leftmargin=*]
+  \item minimality;
+  \item readability;
+  \item maintainability;
+  \item compatibility;
+  \item performance;
+  \item security;
+  \item test coverage;
+  \item adherence to project conventions.
+\end{itemize}
+
+\subsection{Process quality}
+
+The trace matters. Did the agent inspect relevant files? Did it run the right tests? Did it stop after success? Did it avoid unrelated rewrites? Did it explain risks honestly?
+
+\subsection{Review burden}
+
+The practical metric is not only ``agent solved task.'' It is ``agent reduced human work.'' A coding agent that produces huge, noisy diffs increases review burden. A strong coding agent produces small, test-backed diffs with clear explanations.
+
+\section{Where coding agents fail}
+
+Common failure modes include:
+
+\begin{itemize}[leftmargin=*]
+  \item changing too much code;
+  \item satisfying visible tests while missing hidden requirements;
+  \item misreading architecture conventions;
+  \item adding dependencies unnecessarily;
+  \item masking errors instead of fixing root causes;
+  \item ignoring security implications;
+  \item failing to update tests or docs;
+  \item producing plausible but unmaintainable code;
+  \item getting stuck in test-repair loops;
+  \item over-trusting generated code from a sub-agent.
+\end{itemize}
+
+These failures explain why coding agents should be treated as junior-to-mid-level contributors with extraordinary speed, not as unquestioned commit authorities. They need task scoping, review, tests, and governance.
+
+\section{Relationship to LangGraph and OpenClaw}
+
+Coding agents connect the previous chapters.
+
+\begin{itemize}[leftmargin=*]
+  \item A LangGraph workflow can orchestrate coding work: plan, delegate to Codex, run tests, ask for review, create release notes.
+  \item An OpenClaw-style personal assistant can call a coding agent as a stochastic tool when the user asks it to modify a repository.
+  \item Codex-like agents can expose MCP interfaces so other agents can delegate implementation.
+  \item Langfuse or another tracing system can record the parent-child trace and evaluate the result.
+\end{itemize}
+
+The design choice is therefore not \emph{LangGraph versus Codex versus OpenClaw}. They occupy different layers:
+
+\begin{longtable}{p{0.24\textwidth}p{0.58\textwidth}}
+\toprule
+\textbf{System} & \textbf{Role} \\
+\midrule
+LangGraph & Explicit orchestration and control flow for an application workflow \\
+OpenClaw & Persistent personal/organizational agent harness across channels and tools \\
+Codex-style coding agent & Specialized software engineering worker that reads, edits, runs, validates, and proposes code changes \\
+Langfuse & Trace, evaluation, and feedback-loop layer across runs \\
+\bottomrule
+\end{longtable}
+
+\section{A production pattern for coding-agent delegation}
+
+A safe production pattern is:
+
+\begin{enumerate}[leftmargin=*]
+  \item The parent agent receives a software task.
+  \item It classifies risk and determines whether coding-agent delegation is allowed.
+  \item It writes a scoped implementation brief.
+  \item It launches the coding agent in a sandbox.
+  \item The coding agent returns a diff, test results, and explanation.
+  \item A reviewer agent critiques the diff.
+  \item Deterministic checks run: tests, lint, type checks, security scan.
+  \item The parent agent summarizes evidence and asks for human approval.
+  \item Only after review does the change become a pull request or merge candidate.
+\end{enumerate}
+
+This pattern treats the coding agent as powerful but bounded. It can accelerate implementation, but it does not bypass engineering controls.
+
+\section{Summary}
+
+Coding agents are agentic AI in a verifiable environment. They evolved from autocomplete to repository-aware assistants to patch-producing software engineering agents. OpenAI Codex illustrates the modern pattern: local CLI, cloud tasks, repository context, isolated environments, AGENTS.md guidance, skills, subagents, MCP integration, and security controls. The main architectural lesson is that coding agents should be integrated as specialized stochastic tools with strong contracts, sandboxing, tests, traces, and human review. Used this way, they become one of the most practical forms of agentic automation.
