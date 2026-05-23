@@ -1,93 +1,97 @@
+```latex
 \chapter{Tools, Function Calling, and MCP}
 
-Function calling is the mechanism by which a model emits structured arguments for an external capability. MCP, the Model Context Protocol, is a standard way to expose tools, prompts, and resources to model hosts. Together they make the action layer portable: tools can be implemented once and reused across agents, IDEs, desktop applications, and cloud runtimes.
+The Model Context Protocol (MCP) is a standardised interface for exposing tools, prompts,
+and resources to model hosts. It makes the action layer portable: tools can be implemented
+once and reused across agents, development environments, desktop applications, and cloud
+deployments.
 
-\section{The function-calling loop}
+\section{The Function-Calling Loop}
 
-A tool call usually follows this loop:
+When a model is given access to tools, each reasoning step follows a structured cycle. The
+agent framework presents the model with the user request alongside the available tool
+schemas. The model determines whether the current state of the task requires a tool
+invocation, and if so emits a structured call containing the tool name and a JSON argument
+object. The framework validates that call against the schema before passing it to the tool.
+The tool runs, and the framework returns its output to the model as an observation. The
+model then either synthesises a final answer or initiates another step.
 
-\begin{enumerate}[leftmargin=*]
-  \item The runtime sends the model the user request plus tool schemas.
-  \item The model decides whether a tool is needed.
-  \item The model emits a structured call: tool name plus JSON arguments.
-  \item The runtime validates the call.
-  \item The tool executes.
-  \item The runtime returns the observation to the model.
-  \item The model synthesizes a final answer or chooses another step.
-\end{enumerate}
+The model does not require knowledge of the tool's implementation. It requires a precise
+external contract. This is why schema design, as discussed in the previous chapter, often
+has greater influence on agent behaviour than prompt prose: a well-specified schema reduces
+ambiguity before the model reasons, whereas a prompt correction must override a confusion
+the model has already formed.
 
-The model does not need to know the implementation. It needs a precise external contract. This is why schema design often matters more than prompt prose. A good schema reduces ambiguity before the model ever reasons.
+\section{MCP Primitives}
 
-\section{Tool selection and tool routing}
+The MCP specification defines three principal abstractions.\footnote{MCP specification:
+\url{https://modelcontextprotocol.io/specification/2025-06-18}.} Tools are model-invoked
+capabilities that interact with external systems, APIs, computations, or stateful actions;
+each tool is exposed by a server with a name, metadata, and an input
+schema.\footnote{MCP tools specification:
+\url{https://modelcontextprotocol.io/specification/2025-06-18/server/tools}.} Resources
+are contextual data items exposed by a server and selected by the application or client;
+a resource may be a file, a document, a database record, or a repository item. Prompts
+are reusable templates and workflow instructions that clients can discover and retrieve
+from a server.\footnote{MCP prompts specification:
+\url{https://modelcontextprotocol.io/specification/2025-06-18/server/prompts}.}
 
-Real systems may expose dozens or hundreds of tools. Passing every full schema to every model call wastes context and can reduce reliability. A common design is a two-stage router.
+This distinction maps directly onto the layered architecture of this book. Tools primarily
+belong to the action layer. Resources and prompts primarily support the memory and
+knowledge layer. All three require security boundaries: because any client that can reach
+an MCP server can invoke its tools, the server must enforce authentication and
+authorisation independently of the consuming agent.
 
-\begin{enumerate}[leftmargin=*]
-  \item A lightweight router receives the user request and a compact tool catalog.
-  \item It selects a small set of candidate tools.
-  \item The main model receives only those full schemas.
-  \item The main model decides whether and how to call one of them.
-\end{enumerate}
+\section{Local Tools and Remote Tools}
 
-The router should optimize for recall. It is better to include one extra candidate tool than to exclude the necessary one. Precision can be handled by the main model and by validators.
+Tools can run inside the agent process or behind a remote endpoint. A local tool is a
+plain function co-located with the agent code; it is straightforward to prototype and
+debug, but its availability is limited to the agent that defines it and its security
+controls are scoped to the process. A remote tool runs behind an API, a serverless
+function, an MCP server, or a managed gateway; it introduces network overhead but enables
+the tool to be shared across multiple agents, governed through identity and policy
+controls, audited centrally, and scaled independently of the agent.
 
-\section{MCP primitives}
+The practical progression is to develop and stabilise a tool locally, establish its
+schema and write tests against it, and then promote it to a remote endpoint when it must
+be shared or brought under organisational governance.
 
-The MCP specification defines several primitives. The most important for this book are tools, resources, and prompts.
+\section{Validation Before Execution}
 
-\begin{description}[leftmargin=*]
-  \item[Tools.] Model-invoked capabilities that interact with external systems, APIs, computations, or actions. The MCP specification describes tools as server-exposed capabilities with names, metadata, and schemas.\footnote{MCP tools specification: \url{https://modelcontextprotocol.io/specification/2025-06-18/server/tools}.}
-  \item[Resources.] Contextual data exposed by a server and selected by the application or client. A resource might be a file, document, database record, or repository item.
-  \item[Prompts.] Reusable prompt templates and workflow packages exposed by a server. The MCP prompt specification describes prompts as structured messages and instructions that clients can discover and retrieve.\footnote{MCP prompts specification: \url{https://modelcontextprotocol.io/specification/2025-06-18/server/prompts}.}
-\end{description}
+Tool call validation occurs in two distinct places, and conflating them is a common
+source of production failures. The first is structural validation: the agent framework
+checks that the model's emitted arguments conform to the tool's schema before the tool
+is invoked. When a tool's input type is declared precisely---using typed function
+signatures and constrained field definitions---the framework can enforce this contract
+automatically and fail early if the model's output does not conform. The second is
+authorisation: an independent component verifies that the caller's identity is permitted
+to invoke the requested capability. This separation ensures that schema conformance and
+access control are enforced by distinct mechanisms, neither of which depends on the
+model's own judgment.
 
-This distinction helps align MCP with the layers in this book. Tools primarily belong to the action layer. Resources and prompts primarily support the memory and knowledge layer. All three need security boundaries.
+\section{Tool Hallucination}
 
-\section{Local tools versus remote tools}
-
-Local tools run inside the agent process. They are easy to prototype and debug. Remote tools run behind an API, Lambda function, MCP server, or gateway. They are easier to share, secure, scale, and audit.
-
-\begin{longtable}{p{0.23\textwidth}p{0.34\textwidth}p{0.32\textwidth}}
-\toprule
-\textbf{Aspect} & \textbf{Local tool} & \textbf{Remote/MCP tool} \\
-\midrule
-Setup & simple Python function & server, auth, deployment \\
-Sharing & tied to one agent & reusable across hosts \\
-Security & process-level controls & identity, gateway, network policy \\
-Observability & local logs & centralized traces and metrics \\
-Latency & low & network overhead \\
-Governance & ad hoc & policy and audit friendly \\
-\bottomrule
-\end{longtable}
-
-The practical workflow is: start local, stabilize the schema, write tests, then promote to a remote tool if it must be shared or governed.
-
-\section{Validation before execution}
-
-The runtime should validate tool calls before execution. Validation includes:
-
-\begin{itemize}[leftmargin=*]
-  \item schema validation;
-  \item type checking;
-  \item required argument checking;
-  \item authorization;
-  \item policy constraints;
-  \item rate limits;
-  \item side-effect approval.
-\end{itemize}
-
-The model may propose a tool call, but it should not be the authority on whether the call is allowed. The security layer must enforce that outside the model.
-
-\section{Tool hallucination}
-
-Tool hallucination occurs when the model calls a tool that does not exist, invents unsupported arguments, or assumes a tool returned information it did not return. Mitigations include:
-
-\begin{enumerate}[leftmargin=*]
-  \item observability;
-  \item display the tools used by the model in the UI;
-  \item Ask the model to return a flag linked to the tool utilization (e.g "I have submitted the payment");
-\end{enumerate}
+Tool hallucination occurs when the model invokes the wrong tool, constructs arguments
+that the schema does not support, or reasons as though a tool returned information it did
+not return. Schema precision is the primary structural mitigation, as established in the
+previous chapter. At the observability level, the agent's user interface should surface
+which tools were called and with what arguments, making the model's action choices
+visible to the user rather than concealing them behind a final answer. At the output
+level, the model can be instructed to include a structured attestation field in its
+response---for example, a flag indicating that a consequential action such as submitting
+a payment was executed---which creates an explicit, checkable link between the model's
+stated behaviour and the tool invocations recorded in the trace. These mitigations are
+complementary: schema design reduces the rate of hallucination, observability surfaces
+instances that occur, and structured attestation makes them detectable in automated
+evaluation.
 
 \section{Summary}
 
-Function calling makes model actions structured. MCP makes tools, resources, and prompts portable across systems. Reliable tool use depends on routing, schemas, validation, clear error contracts, and observability. Tools can be deterministic or stochastic; the runtime must manage both through explicit contracts.
+MCP standardises the tool interface so capabilities are portable across agents and
+deployment environments. Reliable tool use depends on precise schemas, framework-level
+validation that is independent of the model, and observability infrastructure that makes
+every invocation inspectable. The distinction between local and remote tools is a
+governance boundary as much as an architectural one: the point at which a tool moves to
+a remote endpoint is the point at which organisational identity, policy, and audit
+controls become enforceable.
+```

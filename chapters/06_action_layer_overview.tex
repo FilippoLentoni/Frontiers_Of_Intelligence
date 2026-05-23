@@ -1,105 +1,118 @@
 \chapter{The Action Layer}
 
-The action layer turns model decisions into interactions with external systems. A model can suggest an action, but an action layer executes it, validates it, records it, and returns an observation.
+The action layer is the boundary at which model decisions become effects on external
+systems. A model selects an action; the action layer executes it, validates it, records
+the result, and returns an observation. The design of this layer determines not only what
+the agent can do, but how reliably and safely it does it.
 
-A common oversimplification is to say that tools are deterministic. Many tools are deterministic, but not all. A calculator is deterministic. A database lookup should be deterministic for a fixed state. A web search is partly stochastic because ranking changes, pages change, and snippets vary. A code-generation sub-agent is stochastic. An ``agent as a tool'' may perform its own multi-step reasoning loop before returning an answer.
+A common but misleading simplification is to classify tools as deterministic. The
+relevant distinction is between tools whose outputs are reproducible and whose side
+effects are predictable, and those where neither holds. A schema validator is fully
+reproducible. A database lookup is reproducible for a fixed state. A web search varies
+because rankings change, pages are updated, and snippets are re-extracted. A sub-agent
+wrapping another model introduces its own reasoning loop and may reach a different
+conclusion on each invocation. The architecture must treat each tool according to its
+actual reproducibility and side-effect profile.
 
-The action layer therefore should not be defined as ``deterministic functions.'' It should be defined as \emph{typed external capabilities with explicit invocation boundaries}. Some capabilities produce deterministic outputs; others produce probabilistic. All of them need schemas, permissions, observability, and error handling.
+\section{Schemas as Behavioural Contracts}
 
-\section{Model-controlled, application-controlled, and user-controlled capabilities}
+A tool schema is the primary mechanism by which the model learns what a tool does, when
+it is appropriate to call it, and what constitutes a valid invocation. A well-designed
+schema gives the tool an unambiguous name, a description that specifies both the
+conditions under which the tool should be used and those under which it should not, typed
+arguments with explicit constraints, and a structured output format.
 
-Not every external capability should be controlled by the model.
+Schema quality has a direct and measurable effect on tool selection fidelity. When two
+tools have overlapping descriptions, the model resolves the ambiguity arbitrarily. When
+argument names are vague, parameters are filled incorrectly. When output fields are
+verbose or unstructured, the model may extract the wrong field or ignore the result
+entirely. Research has confirmed that poor schema design is a primary driver of tool
+hallucination---cases where the model selects the wrong tool, supplies malformed
+parameters, or bypasses the tool entirely and fabricates an output that mimics what the
+tool would have returned. The schema is therefore a behavioural control: its precision
+determines the quality of the agent's decisions at the action boundary.
 
-\begin{description}[leftmargin=*]
-  \item[Model-controlled.] The model may decide to call the tool. Example: search the knowledge base, run a safe calculation, inspect a file.
-  \item[Application-controlled.] The application decides when to provide a resource or execute a workflow. Example: automatically insert user profile context, enforce a policy check before every payment.
-  \item[User-controlled.] The user explicitly selects a prompt, workflow, or action. Example: ``summarize this document,'' ``run deployment,'' or ``send this email now.''
-\end{description}
+The following example illustrates a well-formed tool definition using the Strands
+decorator pattern introduced in chapter~8. The name is unambiguous, the description
+specifies both the purpose and the condition for use, arguments are typed with explicit
+constraints, and the return type is structured:
 
-Good architecture does not give the model unnecessary freedom. The model should control low-risk, information-gathering actions. The application should control policy and security. The user should control irreversible or preference-sensitive actions.
+\begin{lstlisting}[language=Python]
+from strands import tool
+from pydantic import BaseModel, Field
 
-\section{Action schemas as behavioral control}
+class JobStatusResult(BaseModel):
+    job_id: str
+    status: str  # "pending" | "running" | "completed" | "failed"
+    progress_pct: float = Field(ge=0.0, le=100.0)
+    error_message: str | None = None
+    summary: str
 
-Tool schemas are not only API descriptions. They are behavioral controls. A clear schema teaches the model what action exists, when it should be used, and what arguments are valid.
-
-A good schema includes:
-
-\begin{itemize}[leftmargin=*]
-  \item a short, unambiguous name;
-  \item a description that says when to use and when not to use the tool;
-  \item typed arguments with constraints;
-  \item examples of valid inputs when helpful;
-  \item a structured output format;
-  \item explicit error codes;
-  \item safety notes for destructive actions.
-\end{itemize}
-
-Bad schemas create hallucinated actions. If two tools have overlapping descriptions, the model may choose arbitrarily. If argument names are vague, the model may fill them incorrectly. If outputs are verbose, the model may miss the important field.
-
-\section{Stochastic tools and agent-as-tool}
-
-A stochastic tool returns outputs that may vary across calls. This matters because the caller cannot assume idempotent behavior. Search results change. A ranking model may reorder candidates. A sub-agent may choose a different path. Even a tool backed by another LLM is a tool from the caller's perspective.
-
-An agent-as-tool pattern is useful when a subtask is complex enough to deserve its own loop. For example:
-
-\begin{itemize}[leftmargin=*]
-  \item a research agent that searches sources and returns a cited briefing;
-  \item a code-review agent that inspects a patch and returns risks;
-  \item a database agent that translates natural language into safe read-only SQL and summarizes results;
-  \item a planner agent that decomposes a broad request into tasks for the main agent.
-\end{itemize}
-
-However, agent-as-tool increases opacity. The parent agent sees only the returned observation unless the sub-agent exposes traces. The system should therefore record nested traces, propagate budgets, and define a clear output contract. Otherwise stochastic delegation becomes an uncontrolled black box.
-
-\section{Idempotency, reversibility, and side effects}
-
-Actions can be classified by side effect.
-
-\begin{description}[leftmargin=*]
-  \item[Read-only.] Search, retrieve, inspect, list, calculate. These are usually safe to call autonomously, though privacy still matters.
-  \item[Reversible write.] Draft email, create ticket, save note, stage file change. These are safer if the user can review or undo.
-  \item[Irreversible or consequential write.] Send payment, delete data, submit tax form, deploy production code. These require stronger approval and audit.
-\end{description}
-
-Idempotency is also important. If a tool is called twice, does it create duplicate tickets or simply return the same result? Production tools should use idempotency keys for operations where repeated calls would cause duplicate side effects.
-
-\section{Tool result design}
-
-Tool outputs should be compact, structured, and decision-relevant. A model does not need a full database object if the user asked whether an order has shipped. It needs the status, date, carrier, tracking number, and uncertainty if any.
-
-A strong pattern is to return both machine-readable fields and a short human-readable summary:
-
-\begin{lstlisting}[language=json]
-{
-  "status": "shipped",
-  "tracking_number": "1Z...",
-  "estimated_delivery": "2026-05-06",
-  "confidence": 0.98,
-  "summary": "The order shipped yesterday and is expected on May 6."
-}
+@tool
+def get_job_status(job_id: str) -> JobStatusResult:
+    """
+    Retrieve the current execution status of a processing job.
+    Use this tool after triggering a job with run_job, and before
+    retrieving results with get_results. Do not call this tool
+    if the job_id is unknown or has not yet been submitted.
+    """
+    raw = _fetch_job_status(job_id)
+    return JobStatusResult(
+        job_id=job_id,
+        status=raw["status"],
+        progress_pct=raw.get("progress", 0.0),
+        error_message=raw.get("error"),
+        summary=(
+            f"Job {job_id} is {raw['status']} "
+            f"({raw.get('progress', 0):.0f}% complete)."
+        ),
+    )
 \end{lstlisting}
 
-The model can use the structured fields to reason and the summary to respond. The trace can store both.
+Several design choices are worth making explicit. The description instructs the model
+both when to call the tool and when to refrain---this negative condition is as important
+as the positive one because it reduces spurious invocations. The return type is a typed
+Pydantic model rather than a raw dictionary, which enforces the output contract at the
+Python level and makes the schema visible to the framework. The \texttt{summary} field
+gives the model a pre-formatted string it can incorporate directly into a response
+without having to synthesise one from the structured fields.
 
-\section{Errors are part of the contract}
+\section{Read Tools and Write Tools}
 
-Every tool should document possible errors. A vague error like ``failed'' is not enough. The model needs to know whether to retry, ask the user, escalate, or stop.
+Tools differ in their side effects, and that difference governs the level of autonomy
+the agent is granted. Read tools---search, retrieval, inspection, calculation---carry no
+persistent consequences and are appropriate for autonomous invocation. Write tools---those
+that modify external state, send communications, or trigger processes---might require
+explicit authorisation in the schema and, for consequential operations, a human approval
+step before execution.
 
-Useful error categories include:
+\section{Agent-as-Tool and the Opacity Problem}
 
-\begin{itemize}[leftmargin=*]
-  \item missing required argument;
-  \item invalid argument format;
-  \item unauthorized;
-  \item resource not found;
-  \item rate limited;
-  \item service unavailable;
-  \item unsafe action blocked;
-  \item ambiguous result.
-\end{itemize}
+When a subtask is sufficiently complex to warrant its own reasoning loop---a research
+task that requires searching multiple sources, a code review that requires inspecting a
+patch against a set of criteria, a planning task that decomposes a broad request into
+ordered steps---it can be encapsulated as a sub-agent and exposed to the parent agent as
+a tool. The parent agent supplies an input and receives an observation; the internal
+execution is hidden.
 
-For stochastic tools and agent-as-tool, the output should also include confidence or evidence. If a research sub-agent returns a conclusion, it should include sources and uncertainty. If a coding sub-agent returns a patch, it should include tests run and tests not run.
+This pattern introduces a structural opacity problem. The parent agent cannot inspect
+the sub-agent's intermediate decisions unless the sub-agent exposes them through a shared
+tracing infrastructure. Research on multi-agent failure modes has found that coordination
+breakdowns---failures at precisely this boundary---represent the largest single category
+of failure in production multi-agent systems. The consequence is that an agent-as-tool
+pattern requires nested traces: the sub-agent's execution must appear as a child span
+within the parent trace, with its tool calls, intermediate reasoning, and output all
+visible at the same level of detail as any other tool invocation. The diagnostic value
+of the trace collapses at the delegation boundary when this structure is absent.
 
 \section{Summary}
 
-The action layer exposes external capabilities through typed invocation boundaries. Tools may be deterministic, stochastic, human-mediated, or full agents. The architecture must treat every tool as a contract: schema, permissions, side effects, output shape, errors, budget, and observability. The detailed application of this layer appears in the LangGraph chapter in the applications section, where tools and sub-agents become graph nodes and callable capabilities.
+The action layer exposes external capabilities through typed invocation boundaries. Each
+tool is a contract: its schema governs how the model selects and invokes it, its read or
+write classification governs how much autonomy is appropriate, and its output design
+governs how well the model can reason from the result. When a tool is itself an agent,
+the contract extends to require that the sub-agent's execution be fully traceable from
+the parent context. The evaluation chapter builds directly on this structure: scores
+attached to trajectory spans measure precisely whether each tool was selected correctly,
+invoked with valid arguments, and its result incorporated appropriately into subsequent
+reasoning.

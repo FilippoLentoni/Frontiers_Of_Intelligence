@@ -1,96 +1,475 @@
-\chapter{Deploying Agents and Tools with AWS AgentCore}
+\chapter{Deploying Agents with AWS AgentCore}
 
-After the agent works locally, the next challenge is deployment. Production agents need runtime isolation, authentication, memory, tool gateways, tracing, metrics, and scaling. Amazon Bedrock AgentCore is one managed platform for this style of deployment. AWS describes AgentCore as an agentic platform for building, deploying, and operating agents securely at scale using any framework and foundation model.\footnote{Amazon Bedrock AgentCore overview: \url{https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html}.}
+Chapter~8 assembled the same assistant in two frameworks, producing two agent
+implementations that run locally when their environment variables point to real gateway
+and memory resources. Deployment extends that work into a governed cloud service: it
+supplies an invocation boundary, an execution role, a memory resource, a governed tool
+surface, a release mechanism, and the observability needed to diagnose failures in
+production.
 
-\section{Deployment target}
+Amazon Bedrock AgentCore provides managed infrastructure for each of these concerns. AWS
+CDK declares all required resources in code. Examining the CDK stack component by
+component reveals what each AgentCore service does and why the provisioning order follows
+the dependencies it does.
 
-A deployed agent should expose a simple interface:
+\section{Step 1: Understand what the runtime expects}
 
-\begin{lstlisting}[language=json]
-{
-  "prompt": "What is the return policy for my laptop?",
-  "session_id": "...",
-  "user_id": "..."
-}
+Before writing infrastructure, it helps to understand the contract the agent code already
+satisfies. In chapter~8, both agents wrap themselves in a \texttt{BedrockAgentCoreApp}
+and expose exactly one \texttt{@app.entrypoint} function:
+
+\begin{lstlisting}[language=Python]
+from bedrock_agentcore import BedrockAgentCoreApp
+
+app = BedrockAgentCoreApp()
+
+@app.entrypoint
+async def invoke(payload: dict, context=None):
+    prompt = str(payload.get("prompt") or "").strip()
+    runtime_session_id = _runtime_session_id_from(
+        payload, context
+    )
+    # ... agent logic ...
+    yield {
+        "message": {
+            "role": "assistant",
+            "content": [{"text": response_text}],
+        }
+    }
+
+def main():
+    app.run(host="0.0.0.0", port=8080)
 \end{lstlisting}
 
-Behind that interface, the runtime must reconstruct the graph or agent, load configuration, authenticate the request, attach memory, discover tools, invoke the model, and stream or return the response.
+\texttt{BedrockAgentCoreApp.run()} starts an HTTP server on port 8080. AgentCore Runtime
+sends invocation requests to this server, supplies the \texttt{runtimeSessionId} through
+the context object, and streams or collects the yielded events. The agent code does not
+need to know it is running in a container or behind a managed runtime; it only needs to
+be packaged so that AgentCore can start it.
 
-\section{From local tools to shared tools}
+This separation means the same code can be tested locally by running
+\texttt{python~-m~agent.app} and passing test payloads directly, and deployed by
+packaging the \texttt{agent/} directory as a Docker image.
 
-A local prototype begins with local tools. This is the right place to start because it keeps iteration fast. Once the tool schema stabilizes, tools that need sharing or governance should be moved behind a gateway.
+\section{Step 2: Build the tool layer}
 
-AWS AgentCore Gateway is described as a way to build, deploy, discover, and connect to tools at scale, including converting APIs, Lambda functions, and existing services into MCP-compatible tools.\footnote{AgentCore Gateway documentation: \url{https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html}.} The general pattern is:
+The runtime does not own the business logic. A well-structured deployment separates tool
+implementation from agent orchestration by placing domain operations in a Lambda
+function. The Lambda function is the first resource created in the CDK stack, before the
+runtime, because the gateway and the runtime both depend on it.
 
-\begin{enumerate}[leftmargin=*]
-  \item implement backend capability, such as Lambda or API;
-  \item define tool schema;
-  \item attach the backend as a gateway target;
-  \item protect the gateway with identity;
-  \item let agents discover tools through MCP.
-\end{enumerate}
+\begin{lstlisting}
+import { createToolsResources } from './tools-construct';
 
-The benefit is not only reuse. It is centralized permissioning, logging, and versioning.
+const tools = createToolsResources(this, {
+  stageName: props.stage.name,
+  removalPolicy,
+  modelId: DEFAULT_MODEL_ID,
+});
+\end{lstlisting}
 
-\section{Memory in deployment}
+\texttt{createToolsResources} returns a Lambda function and a DynamoDB state table. The
+Lambda function handles tool invocations from the AgentCore Gateway and any scheduled or
+event-driven triggers the application requires. The DynamoDB table stores all typed
+records with a configurable TTL.
 
-AgentCore Memory provides managed short-term and long-term memory for agents. AWS describes it as supporting conversation context and long-term knowledge retention.\footnote{AgentCore Memory documentation: \url{https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html}.}
+This separation gives the deployment a clean ownership model: the agent owns reasoning,
+the gateway owns tool discovery and protocol, the Lambda owns domain operations, and
+DynamoDB owns persisted state.
 
-A deployed agent should not store raw conversation history indefinitely by default. It should apply a memory write policy: what to store, where to store it, under which user or actor ID, with what confidence, and for how long. Memory namespaces should be tenant- and user-aware.
+\section{Step 3: Create the execution role}
 
-\section{Runtime entrypoint}
+The agent runtime needs an IAM role that grants it permission to invoke the model, write
+logs, call the gateway, and access memory. AgentCore assumes this role using a service
+principal with conditions that prevent confused deputy attacks:
 
-The runtime entrypoint responsibilities are:
+\begin{lstlisting}
+const runtimeRole = new iam.Role(this, 'AgentRuntimeRole', {
+  assumedBy: new iam.ServicePrincipal(
+    'bedrock-agentcore.amazonaws.com'
+  ).withConditions({
+    StringEquals: {
+      'aws:SourceAccount': this.account,
+    },
+    ArnLike: {
+      'aws:SourceArn':
+        `arn:aws:bedrock-agentcore:${this.region}:`
+        + `${this.account}:runtime/*`,
+    },
+  }),
+});
 
-\begin{itemize}[leftmargin=*]
-  \item parse request payload;
-  \item authenticate and extract identity claims;
-  \item load configuration from environment or parameter store;
-  \item initialize model, memory, and tool clients;
-  \item invoke the graph;
-  \item return or stream the response;
-  \item record traces and errors.
-\end{itemize}
+runtimeRole.addToPolicy(new iam.PolicyStatement({
+  actions: [
+    'bedrock:InvokeModel',
+    'bedrock:InvokeModelWithResponseStream',
+    'cloudwatch:PutMetricData',
+    'logs:CreateLogGroup',
+    'logs:CreateLogStream',
+    'logs:PutLogEvents',
+  ],
+  resources: ['*'],
+}));
 
-A runtime-ready design lets the same graph be tested locally and deployed remotely.
+tools.toolFunction.grantInvoke(runtimeRole);
+dataBucket.grantReadWrite(runtimeRole);
+\end{lstlisting}
 
-\section{Observability}
+The conditions on the trust policy limit which AgentCore resources can assume this role.
+Without them, any AgentCore runtime in the account could assume the role. The
+\texttt{aws:SourceArn} condition restricts assumption to runtimes in this account and
+region.
 
-Deployment without observability is a demo. A production agent should record:
+\section{Step 4: Provision AgentCore Memory}
 
-\begin{itemize}[leftmargin=*]
-  \item request metadata;
-  \item model name and version;
-  \item prompt or prompt version;
-  \item input and output tokens;
-  \item tool calls and arguments;
-  \item tool outputs or redacted summaries;
-  \item latency per node;
-  \item cost per step;
-  \item memory reads and writes;
-  \item safety checks;
-  \item final evaluation scores.
-\end{itemize}
+Memory is provisioned as an independent resource before the runtime. Both the Strands and
+LangGraph implementations receive the memory ID through an environment variable and bind
+it at startup; they do not create memory resources themselves.
 
-AgentCore Observability and CloudWatch can provide runtime traces and metrics. The design lesson applies to any cloud: traces should reflect the graph and the layers, not only the final model call.
+\begin{lstlisting}
+import { Memory, MemoryStrategy } from
+  '@aws-cdk/aws-bedrock-agentcore-alpha';
 
-\section{Deployment checklist}
+const memory = new Memory(this, 'AgentCoreMemory', {
+  memoryName: `agent_memory_${props.stage.name}`,
+  description: 'Long-term memory for user preferences.',
+  expirationDuration: Duration.days(30),
+  memoryStrategies: [
+    MemoryStrategy.usingUserPreference({
+      name: 'user_preferences',
+      description: 'Long-term preferences across sessions.',
+      namespaces: ['/actors/{actorId}/preferences'],
+    }),
+  ],
+});
 
-Before production, verify:
+memory.grantWrite(runtimeRole);
+memory.grantRead(runtimeRole);
+\end{lstlisting}
 
-\begin{enumerate}[leftmargin=*]
-  \item tool schemas have tests;
-  \item prompts and skills are versioned;
-  \item memory write policy is implemented;
-  \item identity is enforced outside the model;
-  \item high-risk tools require approval;
-  \item traces are captured;
-  \item evaluation datasets exist;
-  \item rollback is possible;
-  \item costs are monitored;
-  \item failure modes are documented.
-\end{enumerate}
+The memory strategy declares that this resource stores user preferences keyed by actor
+identifier. AgentCore Memory handles the vector index and retrieval. The agent code uses
+the memory ID to construct the checkpointer, the store, or the session manager depending
+on the framework, and the namespace \texttt{/actors/\{actorId\}/preferences} is where
+both the Strands session manager and the LangGraph pre-model hook write and search.
+
+\section{Step 5: Create the AgentCore Gateway}
+
+The gateway is the MCP endpoint that the agent uses at runtime. It advertises tool
+schemas, enforces IAM authentication on every tool invocation, and routes calls to the
+Lambda backend.
+
+\begin{lstlisting}
+import {
+  Gateway,
+  GatewayAuthorizer,
+  GatewayProtocol,
+  MCPProtocolVersion,
+  McpGatewaySearchType,
+} from '@aws-cdk/aws-bedrock-agentcore-alpha';
+
+const agentCoreGateway = new Gateway(scope,
+  'AgentGateway', {
+  gatewayName: `agent-gateway-${stageName}`,
+  description: 'MCP gateway for agent tools.',
+  authorizerConfiguration: GatewayAuthorizer.usingAwsIam(),
+  protocolConfiguration: GatewayProtocol.mcp({
+    supportedVersions: [
+      MCPProtocolVersion.MCP_2025_06_18,
+      MCPProtocolVersion.MCP_2025_03_26,
+    ],
+    searchType: McpGatewaySearchType.SEMANTIC,
+    instructions:
+      'Use these tools to retrieve data, trigger processing '
+      + 'jobs, inspect results, and record governed decisions.',
+  }),
+});
+
+agentCoreGateway.addLambdaTarget(
+  'AgentToolsTarget', {
+  gatewayTargetName: 'agent-tools',
+  description: 'Domain tools via Lambda.',
+  lambdaFunction: toolFunction,
+  toolSchema: ToolSchema.fromInline(AGENT_TOOL_SCHEMA),
+});
+
+agentCoreGateway.grantInvoke(runtimeRole);
+\end{lstlisting}
+
+The gateway is not the Lambda function. The Lambda function is a target: it receives
+invocations from the gateway when a tool is called. The gateway owns the MCP protocol
+layer, handles tool discovery, and enforces SigV4 authentication. This means the agent
+code calls the gateway endpoint, not the Lambda directly. The gateway decouples the agent
+from the underlying implementation so a tool target can be a Lambda, a Fargate service,
+or any HTTP endpoint without changing the agent code.
+
+The \texttt{grantInvoke(runtimeRole)} call allows the runtime container to call the
+gateway. Without it, the signed requests from the agent would fail with an authorisation
+error.
+
+The runtime role also needs a specific gateway invocation permission:
+
+\begin{lstlisting}
+runtimeRole.addToPolicy(new iam.PolicyStatement({
+  actions: ['bedrock-agentcore:InvokeGateway'],
+  resources: [
+    agentCoreGateway.agentCoreGatewayArn,
+    `${agentCoreGateway.agentCoreGatewayArn}`
+    + `/gateway-endpoint/*`,
+  ],
+}));
+\end{lstlisting}
+
+\section{Step 6: Package and deploy the Runtime}
+
+With the role, memory, and gateway in place, the runtime can be declared. The CDK
+\texttt{Runtime} construct packages the \texttt{agent/} directory as a Docker image and
+registers it with AgentCore:
+
+\begin{lstlisting}
+import {
+  AgentRuntimeArtifact,
+  Runtime,
+  RuntimeAuthorizerConfiguration,
+  RuntimeNetworkConfiguration,
+  ProtocolType,
+} from '@aws-cdk/aws-bedrock-agentcore-alpha';
+import { ecrAssets } from 'aws-cdk-lib';
+
+const runtime = new Runtime(this, 'AgentRuntime', {
+  runtimeName: props.stage.runtimeName,
+  executionRole: runtimeRole,
+  agentRuntimeArtifact: AgentRuntimeArtifact.fromAsset(
+    path.join(__dirname, '..', 'agent'), {
+      platform: ecrAssets.Platform.LINUX_ARM64,
+    }
+  ),
+  networkConfiguration:
+    RuntimeNetworkConfiguration.usingPublicNetwork(),
+  protocolConfiguration: ProtocolType.HTTP,
+  authorizerConfiguration:
+    RuntimeAuthorizerConfiguration.usingIAM(),
+  environmentVariables: {
+    STAGE: props.stage.name,
+    AWS_REGION: this.region,
+    MODEL_ID: DEFAULT_MODEL_ID,
+    GATEWAY_URL: agentCoreGateway.agentCoreGatewayUrl,
+    GATEWAY_REGION: this.region,
+    MEMORY_ID: memory.memoryId,
+    MEMORY_REGION: this.region,
+  },
+});
+\end{lstlisting}
+
+Several details are worth examining.
+
+\texttt{AgentRuntimeArtifact.fromAsset} builds a Docker image from the \texttt{agent/}
+directory and pushes it to ECR. The agent directory must contain a \texttt{Dockerfile}
+that installs dependencies and sets the container entry point to the agent application
+module. CDK handles the build and push during \texttt{cdk deploy}.
+
+\texttt{environmentVariables} is the bridge between infrastructure and code. The agent
+reads the gateway URL, memory ID, and model identifier from environment variables. This
+keeps the same container image portable across stages: a personal stage, a gamma stage,
+and a production stage all use the same image but receive different environment variables
+at runtime.
+
+\texttt{RuntimeAuthorizerConfiguration.usingIAM()} means that every caller of the
+runtime must present a valid SigV4 signature. Callers need the
+\texttt{bedrock-agentcore:InvokeAgentRuntime} permission for the runtime ARN.
+
+\section{Step 7: Add the proxy Lambda for browser clients}
+
+Browser applications cannot sign requests with SigV4 directly. The backend solves this
+with a runtime proxy Lambda that sits between the API Gateway and the AgentCore runtime:
+
+\begin{lstlisting}
+const runtimeProxyFn = new lambda.Function(this,
+  'RuntimeProxyFunction', {
+  runtime: lambda.Runtime.PYTHON_3_11,
+  handler: 'index.handler',
+  code: lambda.Code.fromAsset(
+    path.join(__dirname, '..', 'lambda', 'runtime-proxy')
+  ),
+  timeout: Duration.seconds(30),
+  memorySize: 512,
+  environment: {
+    ALLOWED_RUNTIME_PATTERN: `^${props.stage.runtimeName}`,
+    CORS_ALLOWED_ORIGINS: '*',
+  },
+});
+
+runtimeProxyFn.addToRolePolicy(new iam.PolicyStatement({
+  actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+  resources: [
+    runtime.agentRuntimeArn,
+    `${runtime.agentRuntimeArn}/runtime-endpoint/*`,
+  ],
+}));
+
+const invokeResource = api.root
+  .addResource('runtime')
+  .addResource('invoke');
+
+invokeResource.addMethod('POST',
+  new apigateway.LambdaIntegration(runtimeProxyFn), {
+    authorizationType: apigateway.AuthorizationType.IAM,
+  }
+);
+\end{lstlisting}
+
+The proxy Lambda accepts a request from the IAM-protected API Gateway endpoint, validates
+the runtime name against the \texttt{ALLOWED\_RUNTIME\_PATTERN} environment variable,
+constructs the \texttt{runtimeSessionId} from the request, calls
+\texttt{bedrock-agentcore:InvokeAgentRuntime}, parses the streaming response, and returns
+a JSON envelope to the caller.
+
+The \texttt{ALLOWED\_RUNTIME\_PATTERN} check prevents callers from invoking arbitrary
+runtimes by constructing a different runtime name. The API Gateway endpoint is protected
+by IAM, so the browser application authenticates with IAM credentials (typically via
+Amazon Cognito) and the proxy does the SigV4 signing on its behalf.
+
+This proxy pattern is not convenience wrapping. It is a policy enforcement point: it
+controls which runtimes can be invoked, how session identifiers are constructed, and how
+streaming output is reduced to a response that the browser can parse.
+
+\section{Step 8: Deploy and verify}
+
+The stack is deployed with the CDK CLI:
+
+\begin{lstlisting}
+# Install CDK dependencies
+npm install
+
+# Deploy to a personal stage
+npm run deploy:personal
+
+# Or use CDK directly
+npx cdk deploy AgentBackendStack-personal
+\end{lstlisting}
+
+After deployment, CDK outputs the runtime ARN, the API URL, the gateway URL, and the
+memory ID. These values are the concrete links between the CDK infrastructure and the
+agent's environment variables.
+
+A minimal smoke test verifies the runtime is alive without invoking any backend tools or
+the model:
+
+\begin{lstlisting}[language=Python]
+import boto3, json, uuid
+
+def invoke_agent(
+    runtime_arn: str,
+    region: str,
+    prompt: str,
+) -> str:
+    client = boto3.client(
+        "bedrock-agentcore", region_name=region
+    )
+    response = client.invoke_agent_runtime(
+        payload=json.dumps(
+            {"prompt": prompt}
+        ).encode("utf-8"),
+        runtimeSessionId=f"testuser___{uuid.uuid4()}",
+        agentRuntimeArn=runtime_arn,
+    )
+    body = response.get("response") or response.get("body")
+    return extract_response_text(iter_objects(body))
+
+# Send a health prompt and verify the container is alive
+text = invoke_agent(runtime_arn, region, prompt="health")
+print(text)  # expected: {"status": "ok", ...}
+\end{lstlisting}
+
+The health prompt takes the fast path in both agent implementations: it skips the model,
+the gateway tools, and the memory layer, and returns a static status object. This makes
+it safe to call frequently as a liveness check without incurring model costs. For a
+fuller integration test, send a real task prompt and use Langfuse to capture the trace.
+The evaluation chapter treats that trace as the foundation of diagnostic scoring.
+
+\section{What the runtime owns versus what it delegates}
+
+The deployment creates a clean separation of ownership across services.
+
+\begin{longtable}{p{0.28\textwidth}p{0.62\textwidth}}
+\toprule
+\textbf{Service} & \textbf{Responsibility} \\
+\midrule
+AgentCore Runtime
+    & Packages and runs the agent container; manages invocation
+      lifecycle and session routing \\
+\addlinespace
+AgentCore Gateway
+    & Exposes backend tools via MCP; enforces SigV4
+      authentication on every tool call; handles protocol
+      versioning \\
+\addlinespace
+AgentCore Memory
+    & Stores conversational state, checkpoints, and long-term
+      preferences; provides semantic retrieval \\
+\addlinespace
+Lambda (tools)
+    & Implements all domain operations; owns business logic
+      and state persistence \\
+\addlinespace
+DynamoDB
+    & Persists typed records with a configurable TTL \\
+\addlinespace
+EventBridge
+    & Triggers scheduled or event-driven processing pipelines \\
+\addlinespace
+API Gateway
+    & Provides browser-facing ingress with IAM authentication
+      and CORS \\
+\addlinespace
+Lambda (proxy)
+    & Enforces runtime name policy; translates between API
+      Gateway and AgentCore invocation protocol \\
+\addlinespace
+CloudWatch
+    & Stores structured logs from all Lambda functions; enables
+      query-based diagnostics \\
+\addlinespace
+Secrets Manager
+    & Stores runtime secrets so they are not baked into the
+      container image \\
+\bottomrule
+\end{longtable}
+
+The model is surrounded by conventional cloud services. It does not touch infrastructure
+directly. When the agent calls a gateway tool, IAM governs the call, the gateway
+validates the schema, the Lambda runs the domain logic, and DynamoDB stores the result.
+The agent sees a tool response.
+
+\section{Strands and LangGraph in the same runtime}
+
+Both frameworks deploy to AgentCore using the same CDK stack. The only structural
+difference is which Python module in the \texttt{agent/} directory is set as the entry
+point in the Dockerfile. The CDK runtime artifact, the IAM role, the gateway, and the
+memory resource are identical in both cases.
+
+This is the key property of the deployment pattern: it is framework-neutral. The runtime
+does not care whether the agent is a Strands \texttt{Agent} object or a LangGraph
+\texttt{create\_react\_agent} graph. It cares that the agent exposes an HTTP server on
+port 8080, accepts a JSON payload, yields events in the expected format, and responds to
+health checks.
+
+The same memory ID works with the Strands \texttt{AgentCoreMemorySessionManager} and
+with the LangGraph \texttt{AgentCoreMemorySaver} and \texttt{AgentCoreMemoryStore}. The
+same gateway URL works with the Strands \texttt{GatewayToolPool} and with the LangGraph
+\texttt{MultiServerMCPClient}. The framework choice is an application-layer decision; the
+deployment layer does not need to change when that decision changes.
 
 \section{Summary}
 
-Cloud deployment turns an agent into an operated system. The important pieces are runtime, gateway, identity, memory, observability, and evaluation. AgentCore is one concrete stack for these concerns, but the architecture is portable: keep local logic testable, expose tools through governed interfaces, enforce identity externally, and trace every consequential decision.
+Deploying an agent to AgentCore follows a fixed order: tool layer first, then IAM role,
+then memory, then gateway, then runtime, then proxy. Each resource depends on resources
+created before it. The CDK stack encodes this dependency graph as TypeScript and
+\texttt{cdk deploy} resolves it into a set of CloudFormation change sets.
+
+The agent code stays portable throughout. It reads its gateway URL, memory ID, and model
+identifier from environment variables. The same code runs locally against a test gateway,
+on a personal stage, and in production. The deployment layer supplies environment
+variables and handles authentication; the agent code handles reasoning. That separation
+is what allows the same assistant to run as a Strands agent or a LangGraph graph without
+modifying the infrastructure at all.

@@ -1,200 +1,819 @@
-\chapter{Building Agents with LangGraph}
+\chapter{Building Agents: Strands and LangGraph}
 
-LangGraph is useful because agents are not simple chains. They branch, loop, retry, pause for human input, and resume after failures. The official LangGraph documentation describes the framework around state, nodes, edges, durable execution, human-in-the-loop workflows, and memory.\footnote{LangGraph overview: \url{https://docs.langchain.com/oss/python/langgraph/overview}. Graph API: \url{https://docs.langchain.com/oss/python/langgraph/graph-api}.} This is the first application chapter: we turn the layers from the previous chapters into an implementation pattern.
+The previous chapters established the conceptual architecture of an agent: layers of
+intelligence, action, memory, and security. This chapter makes those abstractions concrete
+by implementing the same assistant twice, once with Strands and once with LangGraph. The
+tools, the gateway, the skills, and the memory resource are identical in both cases. Only
+the way the agent loop is assembled differs. Examining both implementations in parallel
+surfaces what each framework provides and what it leaves to the developer.
 
-\section{Why graphs instead of chains}
+The assistant connects to backend capabilities through an MCP gateway secured with AWS
+Signature Version 4 (SigV4). A \texttt{SKILL.md} document encodes the operating procedure.
+AgentCore Memory keeps track of conversational state and user preferences across sessions.
+The book follows the order in which components are typically written: tools first, then the
+agent loop, then memory, then the entrypoint.
 
-A chain is a fixed sequence: step A, then step B, then step C. Many agent workflows do not behave this way. A research agent may search, read, decide the evidence is insufficient, search again, summarize, ask for approval, and then save a note. A coding agent may inspect files, edit code, run tests, fail, inspect logs, edit again, and stop only when tests pass. These workflows require cycles.
+\section{Step 1: Define the tools}
 
-A graph makes the control structure explicit. Nodes do work. Edges decide where to go next. State carries information between nodes. Conditional edges allow the workflow to branch. Persistence allows the workflow to resume.
-
-\section{State as the agent's working memory}
-
-The first design decision in LangGraph is the state schema. State should contain the minimum information needed to make the next decision and to audit what happened.
-
-A typical state for a tool-using agent might include:
+Tools are the agent's interface to the world. Before picking a framework, define what the
+agent can do. Built-in tools are plain Python functions decorated with the \texttt{@tool}
+decorator. The Strands import and the LangGraph import use different packages, but the
+pattern is identical: a function, a docstring, and an optional return type.
 
 \begin{lstlisting}[language=Python]
-from typing import TypedDict, List, Optional, Any
+# Strands import
+from strands import tool
 
-class AgentState(TypedDict):
-    user_goal: str
-    messages: List[dict]
-    plan: List[str]
-    observations: List[dict]
-    selected_tools: List[str]
-    final_answer: Optional[str]
-    needs_human_approval: bool
-    budget: dict
-    errors: List[dict]
+# LangGraph import
+from langchain_core.tools import tool
+
+@tool
+def get_current_time() -> dict[str, str]:
+    """Return the current UTC time."""
+    from datetime import datetime, timezone
+    return {"utc": datetime.now(timezone.utc).isoformat()}
+
+@tool
+def echo(message: str) -> dict[str, str]:
+    """Return the message back to the caller. Useful for testing."""
+    return {"response": message}
 \end{lstlisting}
 
-This schema is more than type hygiene. It forces the developer to decide what the agent is allowed to remember and what the next node can depend on. It also makes evaluation easier because failures can be localized to state transitions.
+These two tools illustrate the pattern: a decorated function, a docstring that the model
+uses to decide when to call the tool, and a typed return value. In practice, built-in tools
+handle lightweight operations that do not require a gateway round-trip---simple lookups,
+formatting, or diagnostic checks. The more capable tools are loaded dynamically from the
+AgentCore Gateway at startup, as described in the next section.
 
-\section{Core nodes}
+\section{Step 2: Authenticate to the gateway with SigV4}
 
-A robust first agent can be decomposed into the following nodes.
+Because the AgentCore Gateway enforces IAM authentication on every inbound request, the
+agent must sign each HTTP call with AWS Signature Version 4 before sending it. This is the
+standard authentication pattern for any AWS workload calling an IAM-protected service
+endpoint---the same pattern used when a container calls S3, DynamoDB, or any other AWS API
+directly. Since the MCP client uses \texttt{httpx} for transport, the signing logic is
+implemented as a custom \texttt{httpx.Auth} subclass that resolves the container's
+execution role credentials via \texttt{botocore} and attaches the required headers to each
+request.
 
-\begin{longtable}{p{0.24\textwidth}p{0.62\textwidth}}
-\toprule
-\textbf{Node} & \textbf{Responsibility} \\
-\midrule
-Classify intent & Determine whether the task is informational, action-oriented, coding, research, or unsupported. \\
-Assemble context & Retrieve memory, skills, prompts, examples, and documents from the knowledge layer. \\
-Plan & Produce a short plan or decide that no plan is needed. \\
-Select action & Decide whether to answer, retrieve, call a tool, delegate, ask, or stop. \\
-Execute tool & Validate and execute the selected tool call. \\
-Interpret observation & Convert raw tool output into state updates. \\
-Check safety & Apply policy and permission checks before side effects. \\
-Human approval & Pause when a human must approve a consequential action. \\
-Synthesize answer & Produce the final user-facing answer. \\
-Evaluate trace & Score the run or record failure labels for later feedback. \\
-\bottomrule
-\end{longtable}
-
-These nodes do not all need frontier models. Classification may use a small model. Tool execution may be deterministic code. Synthesis may use a larger model only when the answer is complex.
-
-\section{Edges and routing}
-
-Edges encode the control policy. For example:
-
-\begin{itemize}[leftmargin=*]
-  \item if intent is unsupported, go to refusal or clarification;
-  \item if information is missing and recoverable, go to retrieval;
-  \item if a tool call is proposed and low risk, go to execution;
-  \item if a tool call has side effects, go to approval;
-  \item if the budget is exhausted, go to summary and stop;
-  \item if validation fails, go to repair or ask user;
-  \item if success criteria are met, go to final answer.
-\end{itemize}
-
-This is where the abstract cognitive architecture becomes concrete. The model can suggest the next step, but the graph decides whether the transition is allowed.
-
-\section{Minimal graph skeleton}
-
-The following skeleton shows the shape. It is intentionally simplified; production code would include validators, tracing, and error handling.
+It is important to note that this signing layer covers only the agent-to-gateway leg of the
+call. Once the request reaches the gateway, authentication to backend tools such as Lambda
+functions is handled by the gateway itself using its own service role. The agent code is
+never responsible for signing those outbound calls.
 
 \begin{lstlisting}[language=Python]
-from langgraph.graph import StateGraph, START, END
+import hashlib
+from urllib.parse import urlparse
 
-builder = StateGraph(AgentState)
+import botocore.session
+import httpx
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
-builder.add_node("classify", classify_intent)
-builder.add_node("context", assemble_context)
-builder.add_node("plan", create_or_skip_plan)
-builder.add_node("act", select_action)
-builder.add_node("tool", execute_tool)
-builder.add_node("observe", interpret_observation)
-builder.add_node("approval", request_human_approval)
-builder.add_node("answer", synthesize_answer)
+SERVICE_NAME = "bedrock-agentcore"
 
-builder.add_edge(START, "classify")
-builder.add_edge("classify", "context")
-builder.add_edge("context", "plan")
-builder.add_edge("plan", "act")
+class SigV4HTTPAuth(httpx.Auth):
+    requires_request_body = True
 
-builder.add_conditional_edges(
-    "act",
-    route_action,
-    {
-        "tool": "tool",
-        "approval": "approval",
-        "answer": "answer",
-        "stop": END,
-    },
-)
+    def __init__(self, service: str, region: str,
+                 credentials=None):
+        self.service = service
+        self.region = region
+        self.credentials = credentials
 
-builder.add_edge("tool", "observe")
-builder.add_conditional_edges(
-    "observe",
-    route_after_observation,
-    {"continue": "act", "answer": "answer", "stop": END},
-)
-builder.add_edge("answer", END)
+    def auth_flow(self, request: httpx.Request):
+        creds = self._resolve_creds()
+        body = bytes(request.content) if request.content else b""
+        signed_headers = self._sign(request, body, creds)
+        yield httpx.Request(
+            method=request.method,
+            url=request.url,
+            headers=signed_headers,
+            content=body,
+        )
 
-graph = builder.compile()
+    def _resolve_creds(self):
+        if self.credentials:
+            return self.credentials
+        session = botocore.session.get_session()
+        creds = session.get_credentials()
+        if not creds:
+            raise RuntimeError("AWS credentials not found")
+        return creds
+
+    def _sign(self, request, body, creds):
+        parsed = urlparse(str(request.url))
+        headers = {
+            "Host": parsed.netloc,
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+            "X-Amz-Content-Sha256": hashlib.sha256(
+                body
+            ).hexdigest(),
+        }
+        aws_req = AWSRequest(
+            method=request.method,
+            url=str(request.url),
+            data=body,
+            headers=headers,
+        )
+        SigV4Auth(
+            creds, self.service, self.region
+        ).add_auth(aws_req)
+        return dict(aws_req.headers)
 \end{lstlisting}
 
-The graph clarifies where loops happen. The agent may move from \texttt{act} to \texttt{tool} to \texttt{observe} and then back to \texttt{act}. Without a graph, this loop is often hidden in a prompt and hard to debug.
+This class is shared across both framework implementations. Any HTTP request sent through
+this auth handler has its body hashed, its headers signed, and its timestamp included
+before it leaves the agent container.
 
-\section{Tools as nodes versus model-called tools}
+\section{Step 3: Load gateway tools over MCP}
 
-There are two common ways to integrate tools.
+Gateway tools arrive via the MCP protocol. The two frameworks use different MCP clients,
+so the gateway loading code diverges here. Strands uses \texttt{MCPClient} from the
+\texttt{strands.tools.mcp} package and loads tools synchronously during initialisation.
+LangGraph uses \texttt{MultiServerMCPClient} from \texttt{langchain-mcp-adapters} and
+loads tools asynchronously.
 
-\begin{description}[leftmargin=*]
-  \item[Tool as model-call output.] The model emits a tool call, and a tool executor node runs it. This is flexible and works well when the model must choose among tools.
-  \item[Tool as explicit node.] The graph routes to a specific node that calls a specific tool. This is safer when the workflow is known or the action is high-risk.
-\end{description}
-
-For example, a return-policy lookup can be model-selected. A production deployment step should be an explicit node with validation and approval.
-
-\section{Agent as a tool in LangGraph}
-
-A sub-agent can be represented as a node or as a callable tool. The key is to constrain it with a contract. Suppose a research sub-agent receives a question and returns a cited brief. The parent graph should pass a budget and require structured output.
+\paragraph{Strands gateway loader.}
 
 \begin{lstlisting}[language=Python]
-def call_research_agent(state: AgentState) -> dict:
-    result = research_graph.invoke({
-        "question": state["user_goal"],
-        "max_searches": 5,
-        "require_sources": True,
-    })
-    return {
-        "observations": state["observations"] + [{
-            "type": "research_agent",
-            "answer": result["answer"],
-            "sources": result["sources"],
-            "confidence": result["confidence"],
-            "trace_id": result.get("trace_id"),
-        }]
+import os
+import atexit
+from mcp.client.streamable_http import streamablehttp_client
+from strands.tools.mcp import MCPClient
+
+def _gateway_urls() -> list[str]:
+    raw = os.environ.get("GATEWAY_URL", "")
+    return [url.strip() for url in raw.split(",") if url.strip()]
+
+def _make_client(url: str) -> MCPClient:
+    region = os.environ.get("GATEWAY_REGION", "us-west-2")
+    auth = SigV4HTTPAuth(service=SERVICE_NAME, region=region)
+    return MCPClient(
+        lambda: streamablehttp_client(
+            url=url,
+            headers={
+                "Accept": "application/json, text/event-stream"
+            },
+            auth=auth,
+        )
+    )
+
+class GatewayToolPool:
+    def __init__(self) -> None:
+        self.clients: list[MCPClient] = []
+        self.tools_list: list = []
+        self.load_tools()
+        atexit.register(self.stop)
+
+    def load_tools(self) -> None:
+        urls = _gateway_urls()
+        clients = []
+        for url in urls:
+            client = _make_client(url)
+            client.__enter__()
+            clients.append(client)
+        tools = []
+        for client in clients:
+            tools.extend(client.list_tools_sync())
+        self.clients = clients
+        self.tools_list = tools
+
+    def tools(self) -> list:
+        return list(self.tools_list)
+
+    def stop(self) -> None:
+        for client in self.clients:
+            try:
+                client.__exit__(None, None, None)
+            except Exception:
+                pass
+\end{lstlisting}
+
+\texttt{GatewayToolPool} enters each client's context manager on initialisation and
+registers a cleanup function with \texttt{atexit}. The Strands agent holds a reference
+to this pool and calls \texttt{tools()} to get the current list. Because Strands holds
+persistent MCP client connections, the pool must be kept alive for the duration of the
+container's lifetime.
+
+\paragraph{LangGraph gateway loader.}
+
+\begin{lstlisting}[language=Python]
+import os
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async def load_gateway_tools() -> list:
+    urls = _gateway_urls()
+    if not urls:
+        return []
+
+    region = os.environ.get("GATEWAY_REGION", "us-west-2")
+    client_config = {}
+    for index, url in enumerate(urls):
+        client_config[f"backend_{index}"] = {
+            "transport": "http",
+            "url": url,
+            "auth": SigV4HTTPAuth(
+                service=SERVICE_NAME, region=region
+            ),
+            "headers": {
+                "Accept": "application/json, text/event-stream"
+            },
+        }
+
+    client = MultiServerMCPClient(client_config)
+    return await client.get_tools()
+\end{lstlisting}
+
+The LangGraph loader is a coroutine. It awaits \texttt{get\_tools()} and returns
+LangChain-compatible tool objects that can be passed directly to
+\texttt{create\_react\_agent}. Unlike the Strands pool,
+\texttt{MultiServerMCPClient} is stateless by default: each tool invocation creates a
+fresh MCP session, executes the tool, and closes the session. This means the LangGraph
+implementation does not require session affinity at the container level, but it incurs a
+small per-call connection overhead.
+
+\section{Step 4: Encode operating procedures in SKILL.md}
+
+Tools tell the agent \emph{how} to call a capability. A skill tells the agent \emph{when}
+and \emph{why} to use capabilities in a particular order. The assistant has one skill: a
+Markdown document that defines the standard operating procedure for the tasks it is
+responsible for.
+
+The skill document starts with YAML frontmatter that names the skill and declares which
+gateway tools it is allowed to use:
+
+\begin{lstlisting}
+---
+name: data-processing-assistant
+description: >
+  Standard operating procedure for data retrieval,
+  job execution, and result review.
+allowed-tools:
+  - backend___fetch_data
+  - backend___run_job
+  - backend___check_status
+  - backend___get_results
+  - backend___create_override
+---
+
+## Processing Flow
+
+1. Confirm the input identifier with the user.
+2. Fetch the relevant data with fetch_data.
+3. Trigger the processing job with run_job.
+4. Poll completion status with check_status.
+5. Retrieve and summarise results with get_results.
+\end{lstlisting}
+
+The skill registry reads these files and returns metadata for the system prompt and full
+content for the agent's operating context:
+
+\begin{lstlisting}[language=Python]
+from pathlib import Path
+from typing import Any
+
+def skill_files(base_dir: Path | None = None) -> list[Path]:
+    root = base_dir or Path(__file__).parent
+    return sorted((root / "skills").glob("*/SKILL.md"))
+
+def parse_skill_frontmatter(
+    skill_file: Path,
+    base_dir: Path | None = None,
+) -> dict[str, Any]:
+    text = skill_file.read_text(encoding="utf-8")
+    root = base_dir or Path(__file__).parent
+    metadata: dict[str, Any] = {
+        "name": skill_file.parent.name,
+        "description": "",
+        "allowedTools": [],
+        "path": str(skill_file.relative_to(root)),
+    }
+    if not text.startswith("---"):
+        return metadata
+    end = text.find("\n---", 3)
+    if end == -1:
+        return metadata
+    current_key = ""
+    for raw_line in text[3:end].splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        if (line.startswith("  - ")
+                and current_key == "allowed-tools"):
+            metadata["allowedTools"].append(line[4:].strip())
+            continue
+        if ":" in line and not line.startswith(" "):
+            key, value = line.split(":", 1)
+            current_key = key.strip()
+            if current_key == "name":
+                metadata["name"] = value.strip()
+            elif current_key == "description":
+                metadata["description"] = value.strip()
+            elif current_key == "allowed-tools":
+                metadata["allowedTools"] = []
+    return metadata
+
+def loaded_skills(base_dir: Path | None = None) -> list[dict]:
+    root = base_dir or Path(__file__).parent
+    return [
+        parse_skill_frontmatter(f, root)
+        for f in skill_files(root)
+    ]
+\end{lstlisting}
+
+The frontmatter parser keeps the logic minimal: it reads YAML keys without a YAML library
+so the agent package stays lean. Strands consumes the skills directory through a plugin.
+LangGraph reads the full document content and embeds it in the system prompt.
+
+\section{Step 5: Build the Strands agent}
+
+Strands takes a declarative approach. The developer provides a model, a session manager,
+plugins, tools, and a system prompt. The framework owns the agent loop: it decides when to
+call the model, when to invoke tools, and how to stream results back. The agent's code
+describes \emph{what} the agent is, not \emph{how} its loop runs.
+
+\begin{lstlisting}[language=Python]
+import json, os
+from pathlib import Path
+from strands import Agent, AgentSkills
+from bedrock_agentcore.memory.integrations.strands\
+    .session_manager import AgentCoreMemorySessionManager
+
+def _model_id() -> str:
+    return os.environ.get(
+        "MODEL_ID", "us.amazon.nova-2-lite-v1:0"
+    )
+
+_agent: Agent | None = None
+_gateway_pool: GatewayToolPool | None = None
+
+def _gateway_tools() -> list:
+    global _gateway_pool
+    if _gateway_pool is None:
+        _gateway_pool = GatewayToolPool()
+    tools = _gateway_pool.tools()
+    if not tools:
+        raise RuntimeError("No gateway tools loaded")
+    return tools
+
+def _skills_plugin():
+    return AgentSkills(
+        skills=str(Path(__file__).parent / "skills")
+    )
+
+def _memory_session_manager(
+    runtime_session_id: str,
+) -> AgentCoreMemorySessionManager:
+    actor_id, session_id = _parse_runtime_session_id(
+        runtime_session_id
+    )
+    # Replace with your AgentCore Memory ID and region
+    return AgentCoreMemorySessionManager(
+        agentcore_memory_config={
+            "memory_id": os.environ["MEMORY_ID"],
+            "actor_id": actor_id,
+            "session_id": session_id,
+        },
+        region_name=os.environ.get(
+            "MEMORY_REGION", "us-west-2"
+        ),
+    )
+
+def _agent_instance(runtime_session_id: str) -> Agent:
+    global _agent
+    if _agent is None:
+        gateway_tools = _gateway_tools()
+        _agent = Agent(
+            model=_model_id(),
+            session_manager=_memory_session_manager(
+                runtime_session_id
+            ),
+            plugins=[_skills_plugin()],
+            tools=[
+                get_current_time,
+                echo,
+                *gateway_tools,
+            ],
+            system_prompt=(
+                "You are a helpful assistant. "
+                "Use the available gateway tools to complete "
+                "tasks. Follow the loaded skills for standard "
+                "operating procedures.\n\n"
+                f"Loaded skills: "
+                f"{json.dumps(loaded_skills())}\n\n"
+            ),
+            callback_handler=None,
+        )
+    return _agent
+\end{lstlisting}
+
+Three things are worth observing here.
+
+First, memory is attached as a \emph{session manager}. The Strands \texttt{Agent} receives
+an \texttt{AgentCoreMemorySessionManager} and from that point treats memory as a framework
+service. It retrieves relevant history, maintains conversational continuity, and writes new
+interactions to memory as part of the normal agent loop. The application code does not
+manage memory explicitly.
+
+Second, skills arrive through the \texttt{AgentSkills} plugin. The plugin scans the
+\texttt{skills/} directory, parses each \texttt{SKILL.md}, and makes its procedures
+available to the agent without the developer having to embed content manually in a prompt.
+
+Third, the container is pinned to a single session. If the same container receives a
+request for a different session identifier, the agent raises an error. This is a deliberate
+trade-off: because Strands holds stateful MCP client connections through the
+\texttt{GatewayToolPool}, reusing a container across sessions would corrupt session state.
+AgentCore Runtime handles this constraint by routing requests to the correct container.
+
+\section{Step 6: Build the LangGraph agent}
+
+LangGraph makes the agent loop explicit. The developer builds a graph with nodes, edges,
+and hooks. The prebuilt \texttt{create\_react\_agent} supplies a default ReAct
+loop---model call, tool call, observation, repeat---but every part of the loop can be
+extended, replaced, or instrumented.
+
+\paragraph{Memory components.}
+
+LangGraph splits memory into two objects. The checkpointer stores graph state per thread
+so conversations can resume after interruption. The store is a semantic store for
+long-term memory that supports vector search over past interactions.
+
+\begin{lstlisting}[language=Python]
+from langgraph_checkpoint_aws import (
+    AgentCoreMemorySaver,
+    AgentCoreMemoryStore,
+)
+
+def _memory_components():
+    memory_id = os.environ["MEMORY_ID"]
+    region = os.environ.get("MEMORY_REGION", "us-west-2")
+    checkpointer = AgentCoreMemorySaver(
+        memory_id, region_name=region,
+    )
+    store = AgentCoreMemoryStore(
+        memory_id=memory_id, region_name=region,
+    )
+    return checkpointer, store
+\end{lstlisting}
+
+\paragraph{The pre-model hook.}
+
+The pre-model hook runs before every model call. It is the point where the graph reads
+long-term memory and injects it into the conversation. LangGraph exposes this hook
+explicitly because the developer may want to log what was retrieved, filter it, or change
+the injection strategy for different graph branches. Strands handles equivalent retrieval
+inside the framework.
+
+\begin{lstlisting}[language=Python]
+import uuid, json
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.store.base import BaseStore
+
+def _pre_model_hook(
+    state: dict,
+    config: RunnableConfig,
+    *,
+    store: BaseStore,
+) -> dict:
+    configurable = config.get("configurable", {})
+    actor_id = str(
+        configurable.get("actor_id", "default_user")
+    )
+    thread_id = str(
+        configurable.get("thread_id", "default")
+    )
+    messages = list(state.get("messages", []))
+
+    latest_human = next(
+        (
+            m for m in reversed(messages)
+            if isinstance(m, HumanMessage)
+            or getattr(m, "type", None) == "human"
+        ),
+        None,
+    )
+
+    if latest_human is not None:
+        store.put(
+            (actor_id, thread_id),
+            str(uuid.uuid4()),
+            {"message": latest_human},
+        )
+        memories = store.search(
+            (actor_id, thread_id),
+            query=str(
+                getattr(latest_human, "content", "")
+            ),
+            limit=5,
+        )
+        if memories:
+            memory_lines = [
+                json.dumps(
+                    getattr(m, "value", m), default=str
+                )
+                for m in memories
+            ]
+            messages.insert(
+                0,
+                HumanMessage(
+                    content=(
+                        "Relevant memory context:\n"
+                        + "\n".join(memory_lines)
+                    )
+                ),
+            )
+
+    return {"llm_input_messages": messages}
+\end{lstlisting}
+
+The hook saves the latest human message to the store and immediately searches the same
+namespace for relevant prior context. If any is found, it is prepended to the message list
+before the model sees the conversation. This is explicit: the developer controls exactly
+when memory is written, what is searched, and how results are formatted before injection.
+
+\paragraph{Assembling the graph.}
+
+With tools, memory, and hooks in place, the graph is assembled in a single call:
+
+\begin{lstlisting}[language=Python]
+from langchain.chat_models import init_chat_model
+from langgraph.prebuilt import create_react_agent
+
+_graph = None
+_gateway_tools_cache = None
+
+def _build_system_prompt(gateway_tools: list) -> str:
+    tool_names = [
+        getattr(t, "name", str(t)) for t in gateway_tools
+    ]
+    return (
+        "You are a helpful assistant. "
+        "Use the available gateway tools to complete tasks. "
+        "Follow the loaded skills for standard operating "
+        "procedures.\n\n"
+        f"Available gateway tools: {tool_names}\n\n"
+        f"Loaded skills: {json.dumps(loaded_skills())}\n\n"
+    )
+
+async def _graph_instance():
+    global _graph, _gateway_tools_cache
+    if _graph is None:
+        _gateway_tools_cache = await load_gateway_tools()
+        if not _gateway_tools_cache:
+            raise RuntimeError("No gateway tools loaded")
+
+        checkpointer, store = _memory_components()
+        region = os.environ.get("AWS_REGION", "us-west-2")
+        model = init_chat_model(
+            _model_id(),
+            model_provider="bedrock_converse",
+            region_name=region,
+        )
+        tools = [
+            get_current_time,
+            echo,
+            *_gateway_tools_cache,
+        ]
+        _graph = create_react_agent(
+            model=model,
+            tools=tools,
+            checkpointer=checkpointer,
+            store=store,
+            prompt=_build_system_prompt(_gateway_tools_cache),
+            pre_model_hook=_pre_model_hook,
+        )
+    return _graph
+\end{lstlisting}
+
+The \texttt{create\_react\_agent} call builds a prebuilt ReAct graph: the model decides
+which tools to call, each tool is executed, and the observation is fed back to the model
+until it produces a final answer. Skills in LangGraph are embedded in the system prompt:
+the skill registry reads each \texttt{SKILL.md} document and the
+\texttt{\_build\_system\_prompt} function formats them into a single prompt block. There
+is no plugin; the developer controls the skill injection point directly.
+
+\section{Step 7: The entrypoint and session identity}
+
+Both implementations wrap the agent in a \texttt{BedrockAgentCoreApp} and expose an
+\texttt{@app.entrypoint} function. The entrypoint is the interface between the AgentCore
+Runtime and the agent's domain logic. Both use the same convention: the
+\texttt{runtimeSessionId} encodes both actor and session using a triple-underscore
+separator.
+
+\begin{lstlisting}[language=Python]
+def _parse_runtime_session_id(raw: str) -> tuple[str, str]:
+    if "___" in raw:
+        actor_id, session_id = raw.split("___", 1)
+        return actor_id.strip(), session_id.strip()
+    return "default_user", raw.strip()
+
+def _runtime_session_id_from(payload: dict, context) -> str:
+    user_id = str(payload.get("user_id") or "").strip()
+    session_id = str(payload.get("session_id") or "").strip()
+    if user_id and session_id:
+        return f"{user_id}___{session_id}"
+    context_session_id = getattr(context, "session_id", None)
+    if context_session_id:
+        return str(context_session_id)
+    raise ValueError(
+        "Provide user_id + session_id in the payload, "
+        "or invoke through AgentCore with a runtimeSessionId"
+    )
+\end{lstlisting}
+
+\paragraph{Strands entrypoint.}
+
+The Strands entrypoint creates or retrieves the agent instance, then calls
+\texttt{stream\_async} with the user prompt. The framework handles tool calling, memory
+updates, and streaming events internally.
+
+\begin{lstlisting}[language=Python]
+from bedrock_agentcore import BedrockAgentCoreApp
+
+app = BedrockAgentCoreApp()
+
+@app.entrypoint
+async def invoke(payload: dict, context=None):
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required")
+    if prompt.lower() in {"health", "ping", "status"}:
+        yield {"message": {"content": [{"text": "ok"}]}}
+        return
+    runtime_session_id = _runtime_session_id_from(
+        payload, context
+    )
+    agent = _agent_instance(runtime_session_id)
+    async for event in agent.stream_async(prompt):
+        yield event
+\end{lstlisting}
+
+\paragraph{LangGraph entrypoint.}
+
+The LangGraph entrypoint awaits the graph, invokes it with the prompt and session
+configuration, and yields a single response event extracted from the final messages list.
+
+\begin{lstlisting}[language=Python]
+from langchain_core.messages import AIMessage
+
+app = BedrockAgentCoreApp()
+
+def _last_ai_text(messages: list) -> str:
+    for message in reversed(messages):
+        if (
+            isinstance(message, AIMessage)
+            or getattr(message, "type", None) == "ai"
+        ):
+            content = getattr(message, "content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(
+                    item.get("text", "")
+                    if isinstance(item, dict)
+                    else str(item)
+                    for item in content
+                )
+    return ""
+
+@app.entrypoint
+async def invoke(payload: dict, context=None):
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required")
+    if prompt.lower() in {"health", "ping", "status"}:
+        yield {"message": {"content": [{"text": "ok"}]}}
+        return
+    runtime_session_id = _runtime_session_id_from(
+        payload, context
+    )
+    actor_id, session_id = _parse_runtime_session_id(
+        runtime_session_id
+    )
+    graph = await _graph_instance()
+    result = await graph.ainvoke(
+        {"messages": [("human", prompt)]},
+        config={
+            "configurable": {
+                "actor_id": actor_id,
+                "thread_id": session_id,
+            }
+        },
+    )
+    text = _last_ai_text(list(result.get("messages", [])))
+    yield {
+        "message": {
+            "role": "assistant",
+            "content": [{"text": text}],
+        }
     }
 \end{lstlisting}
 
-This makes stochastic delegation observable. The parent agent should not blindly trust the sub-agent. It can verify citations, ask a judge model to critique the answer, or route to human review.
+The Strands version yields events as they arrive from the framework. The LangGraph version
+awaits the full graph result and yields one final response. This reflects a deeper
+difference: Strands is streaming-first by design, while LangGraph's \texttt{ainvoke}
+returns a completed state.
 
-\section{Persistence and durable execution}
+\section{Step 8: The full picture}
 
-LangGraph's persistence is important for production because long-running agents may pause, fail, or wait for human input. Durable execution stores progress so completed steps do not need to be repeated after interruption. The LangGraph documentation describes this as saving state at execution steps so workflows can resume rather than restarting from scratch.\footnote{LangGraph durable execution: \url{https://docs.langchain.com/oss/python/langgraph/durable-execution}.}
+With every component defined, the two agents have the same external shape. Both accept a
+prompt over the AgentCore Runtime boundary. Both authenticate to the same MCP gateway
+using SigV4. Both load the same skill document. Both store and retrieve memory using the
+same AgentCore Memory resource. The difference is in what the developer writes.
 
-Durability changes what agents can do. A customer-support agent can wait for a human approval. A research agent can pause while a user confirms scope. A deployment agent can stop before applying changes and resume after approval. Without persistence, these workflows are fragile.
+With Strands, the developer writes an agent \emph{declaration}. The framework owns the
+loop, the tool dispatch, the memory integration, and the event streaming. The developer
+chooses model, tools, plugins, and prompt. The control flow is implicit in those choices.
 
-\section{Human-in-the-loop checkpoints}
+With LangGraph, the developer writes an agent \emph{graph}. The framework provides a
+graph builder and a default ReAct loop, but the developer can add nodes, attach hooks, add
+conditional edges, and instrument every transition. Memory integration is explicit: the
+developer writes the hook that reads memory and decides how to inject it. Skills
+integration is explicit: the developer reads the skill document and decides how to format
+it in the prompt.
 
-Human approval should be a graph concept, not an afterthought. A node can prepare an approval request with:
+\section{Framework comparison}
 
-\begin{itemize}[leftmargin=*]
-  \item proposed action;
-  \item reason for action;
-  \item expected side effects;
-  \item evidence;
-  \item rollback plan;
-  \item cost estimate;
-  \item exact payload to execute.
-\end{itemize}
+\begin{longtable}{p{0.22\textwidth}p{0.36\textwidth}p{0.32\textwidth}}
+\toprule
+\textbf{Aspect} & \textbf{Strands} & \textbf{LangGraph} \\
+\midrule
+Agent loop
+    & Owned by the framework; hidden from application code
+    & Explicit graph; developer builds nodes and edges \\
+\addlinespace
+Gateway auth
+    & \texttt{SigV4HTTPAuth} passed to \texttt{MCPClient}
+      via \texttt{streamablehttp\_client}
+    & \texttt{SigV4HTTPAuth} passed as \texttt{auth} field
+      in \texttt{MultiServerMCPClient} config \\
+\addlinespace
+MCP connection
+    & Persistent connections held in \texttt{GatewayToolPool};
+      tools loaded once at startup
+    & Stateless per tool call; each invocation opens a fresh
+      MCP session \\
+\addlinespace
+Memory
+    & \texttt{AgentCoreMemorySessionManager} as a framework
+      service; retrieval handled internally
+    & \texttt{AgentCoreMemorySaver} +
+      \texttt{AgentCoreMemoryStore} + explicit pre-model hook \\
+\addlinespace
+Skills
+    & \texttt{AgentSkills} plugin scans the \texttt{skills/}
+      directory automatically
+    & Developer reads \texttt{SKILL.md} files and embeds
+      content in the system prompt \\
+\addlinespace
+Streaming
+    & \texttt{stream\_async()} emits events as the loop runs
+    & \texttt{ainvoke()} returns completed state; streaming
+      requires \texttt{astream()} \\
+\addlinespace
+Session affinity
+    & Required: container pinned to a single session because
+      MCP connections are stateful
+    & Not required: stateless MCP sessions allow the container
+      to serve any session \\
+\addlinespace
+Control flow
+    & Framework decides tool dispatch order
+    & Developer can add conditional edges, interrupts,
+      and custom nodes \\
+\bottomrule
+\end{longtable}
 
-The graph then pauses. After approval, it continues to execution. After rejection, it routes to revision or final explanation.
+\section{When to choose each framework}
 
-\section{Error handling and retries}
+The practical question is where complexity lives in the system.
 
-Retries should be typed, not infinite. A schema validation error can route to argument repair. A rate-limit error can wait or use a backup provider. An authorization error should not be retried by the model; it should ask for permission or stop. A tool returning ambiguous results should route to clarification.
+If complexity lives in the tools and operating procedures---the skill is detailed, the
+gateway exposes many capabilities, the conversation requires careful tool
+sequencing---Strands keeps the application code compact while the skill documents carry
+the domain logic. The framework handles the loop; the developer handles the domain.
 
-A good retry policy records:
+If complexity lives in the orchestration itself---the agent must coordinate deterministic
+steps with model-driven steps, expose checkpoints for human approval, branch on
+domain-specific conditions, or make memory injection visible for evaluation---LangGraph
+provides explicit structure for representing and testing each part of the trajectory.
 
-\begin{itemize}[leftmargin=*]
-  \item error type;
-  \item number of attempts;
-  \item repair strategy;
-  \item whether the model saw the raw error;
-  \item whether the next attempt changed arguments;
-  \item whether human escalation occurred.
-\end{itemize}
-
-\section{Observability hooks}
-
-Every node should produce traceable metadata: model, prompt version, input tokens, output tokens, selected tools, latency, cost, errors, and scores. This is what later enables Langfuse evaluation and CI/CD gates.
-
-A practical rule is: if a failure cannot be localized to a node, the graph is not observable enough.
+Both frameworks integrate with AgentCore Runtime, AgentCore Gateway, and AgentCore Memory.
+The decision is about where control should live: in the tools and operating procedures, or
+in the graph itself.
 
 \section{Summary}
 
-LangGraph turns an agent from an implicit prompt loop into an explicit state machine. State records what the agent knows. Nodes do work. Edges encode control. Tools and sub-agents become callable capabilities. Persistence supports long-running workflows. Human checkpoints make consequential actions governable. This structure is the bridge between the conceptual four-layer architecture and a deployable agent.
+Both implementations accept a prompt over the AgentCore Runtime boundary, authenticate to
+the MCP gateway with SigV4, load tools from the gateway, follow skill-encoded operating
+procedures, and persist state through AgentCore Memory. The gateway authentication
+pattern---signing each inbound request with the container's IAM execution role
+credentials---is the standard approach for any AWS workload calling an IAM-protected
+service endpoint, and applies equally to both frameworks. What differs is the agent loop.
+Strands declares an agent and delegates loop control to the framework. LangGraph builds an
+explicit graph with hooks, memory components, and a system prompt that includes skill
+content directly. The choice between them is a question of where the developer wants to
+own control: in the tools and operating procedures, or in the graph itself.

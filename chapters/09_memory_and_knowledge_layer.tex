@@ -1,114 +1,150 @@
 \chapter{The Memory and Knowledge Layer}
 
-The memory and knowledge layer determines what the agent layer knows at the moment of decision. 
+The memory and knowledge layer determines what information is available to the model at
+the moment of decision. Its function is context engineering: given a task, the layer must
+construct the context window with the subset of available information that is most
+relevant, most current, and most likely to support a correct and grounded response.
 
-\section{Why memory and knowledge are one layer}
+\section{Why Memory and Knowledge Form a Single Layer}
 
-Memory and knowledge are different but tightly connected. Memory stores what the system has learned over time: user preferences, past interactions, decisions, failures, and summaries. Knowledge stores external evidence: documents, notes, code, policies, tickets, manuals, and databases. Context engineering decides which pieces of memory and knowledge enter the model context for a given task.
+Memory and knowledge are distinct in origin but unified in function. Memory accumulates
+through interaction: it records user preferences, past decisions, prior conversation
+turns, and outcomes. Knowledge is sourced externally: documents, policies, codebases,
+manuals, tickets, and databases. Both must pass through the same context engineering
+process before reaching the model's context window. Context engineering governs this
+selection---deciding which pieces of memory and which fragments of knowledge to include
+for a given task, in what form, and at what level of compression.
 
-A bad agent often has enough information somewhere, but fails to assemble the right context. It may retrieve irrelevant chunks, omit a critical policy, include too much noise, or forget that a user already specified a preference. The knowledge layer is therefore not passive storage; it is an active selection system.
+The two are treated as a single layer because failures in either produce the same
+downstream effect on grounding: the model reasons from an incomplete or misleading
+context window. An agent that retrieves irrelevant document chunks, omits a critical
+policy, or fails to surface a previously stated user preference will produce ungrounded
+outputs regardless of the model's underlying capability.
 
-\section{Types of memory}
+\section{Types of Memory}
 
-\begin{description}[leftmargin=*]
-  \item[Working memory.] The current state of the task: messages, plan, tool outputs, unresolved questions, and active constraints.
-  \item[Short-term memory.] Conversation history within a session. It supports coherence across turns.
-  \item[Episodic memory.] Records of past events: what the user asked, what the agent did, what result occurred.
-  \item[Semantic memory.] Stable facts extracted from interactions or documents: user role, project names, known issues, definitions.
-  \item[Preference memory.] User or organization preferences: tone, format, default tools, preferred workflows.
-  \item[Procedural memory.] Reusable skills, checklists, playbooks, and workflows.
-\end{description}
+Memory in agentic systems is usefully classified by its temporal scope and function.
+Working memory is the immediate task context: the current messages, active plan, tool
+outputs, and unresolved constraints that the agent is reasoning over in the present turn.
+Short-term memory spans a session: it preserves conversational history across turns and
+enables the agent to maintain coherence without re-establishing context on every exchange.
+Episodic memory records past events across sessions: what the user requested, what the
+agent did, and what outcome resulted. Semantic memory holds stable extracted facts: user
+role, project names, known issues, and domain definitions that remain valid across
+interactions. Preference memory captures standing instructions about tone, format, default
+tools, and preferred workflows. Procedural memory contains reusable packages of know-how:
+skills, checklists, playbooks, and workflow templates that the agent can retrieve and
+apply when a task matches their scope.
 
-Procedural memory is where ``skills'' belong in this book. A skill is not part of the model weights and not merely a tool. It is a reusable package of know-how that the system can place in context when the task requires it.
+\section{Skills as Procedural Knowledge}
 
-\section{Skills as procedural knowledge}
+A skill occupies a specific position in this taxonomy. It is neither a model weight nor
+a tool: it is a retrievable unit of procedural knowledge that the system injects into the
+context window when the current task requires it. A skill may take the form of a
+domain-specific instruction fragment, a step-by-step checklist for a recurring workflow,
+a repository development guide, a troubleshooting playbook, or a bundle of tool-use rules
+paired with expected output formats.
 
-A skill can be:
+The key property of a skill is that it is selected, versioned, and evaluated independently
+of the model. A skill whose content is outdated introduces incorrect procedural guidance,
+and one that is irrelevant to the current task adds noise to the context window and
+degrades grounding. Skills therefore belong in the knowledge layer and are subject to the
+same retrieval, quality, and freshness requirements as any other document.
 
-\begin{itemize}[leftmargin=*]
-  \item a checklist for performing a task;
-  \item a prompt fragment with domain-specific instructions;
-  \item a repository-specific development guide;
-  \item a troubleshooting playbook;
-  \item an example-driven pattern for a recurring workflow;
-  \item a bundle of tool-use rules and output formats.
-\end{itemize}
+A common representation is a structured Markdown document that pairs machine-readable
+frontmatter with human-readable procedural content. The frontmatter declares the skill's
+name, its intended scope, and the tools it is permitted to invoke; the body encodes the
+step-by-step procedure the agent should follow when the skill is active:
 
-For example, a ``SWE-bench patching skill'' might include: inspect failing tests, locate the relevant package, search for similar functions, modify minimally, run targeted tests, then run broader tests. A ``research synthesis skill'' might include: search multiple source types, separate facts from claims, cite sources, note uncertainty, and produce a structured memo.
+\begin{lstlisting}[language={}]
+---
+name: data-pipeline-diagnosis
+description: >
+  Procedure for diagnosing failures in a data processing pipeline.
+  Use when the user reports missing, delayed, or malformed output.
+allowed-tools:
+  - fetch_job_logs
+  - get_job_status
+  - inspect_schema
+---
 
-Skills should be retrieved, versioned, and evaluated. They should not be pasted into every prompt. A skill that is irrelevant becomes noise. A skill that is outdated becomes harmful. This is why skills belong in the knowledge layer: they are content selected by context, not fixed behavior inside the model.
+## Diagnosis Flow
 
-\section{Prompt engineering versus context engineering}
+1. Retrieve the job identifier from the user or from recent job history.
+2. Call get_job_status to determine whether the job completed,
+   failed, or is still running.
+3. If the job failed, call fetch_job_logs and identify the first
+   error entry.
+4. Call inspect_schema to verify that the input data conforms to
+   the expected format.
+5. Summarise the root cause and propose a remediation step.
+\end{lstlisting}
 
-Prompt engineering is the design of instructions. Context engineering is the design of the entire information packet given to the model. A production prompt may contain:
+This format makes the skill inspectable, diffable, and testable. A new version of the
+skill can be evaluated against a dataset of past failures before it replaces the previous
+version in the retrieval index. The agent framework retrieves the skill document when the
+current task matches its declared scope and injects its content into the context window
+alongside the user's request.
 
-\begin{itemize}[leftmargin=*]
-  \item developer instructions;
-  \item user request;
-  \item task-specific skill;
-  \item retrieved documents;
-  \item memory summaries;
-  \item tool schemas;
-  \item examples;
-  \item policy text;
-  \item output schema;
-  \item previous observations.
-\end{itemize}
+\section{Context Compression}
 
-The core question is not ``what prompt should I write?'' It is ``what should the model know, in what order, at what level of detail, and with what authority?''
+Context windows are finite and carry a cost proportional to their length. Compression is
+the process of reducing the volume of context while preserving the information most
+relevant to the task at hand. Common techniques include summarising prior conversation
+turns through memory consolidation, retaining only the highest-ranked retrieval chunks,
+and converting verbose tool outputs into compact structured fields containing only the
+decision-relevant values.
 
-\section{Context compression}
+Compression introduces its own failure modes. A consolidation step may omit a critical
+qualification present in the original. A memory extraction step may store a temporary
+instruction as a permanent preference. A retrieval filter may exclude the document that
+contains the correct grounding evidence. For this reason, memory and context
+transformations require the same evaluation discipline as model outputs: they are active
+interventions in the context engineering pipeline that can introduce errors at any step.
 
-Context windows are finite and expensive. Compression is the process of reducing context while preserving task-relevant information. Techniques include:
+\section{Memory Write Policy}
 
-\begin{itemize}[leftmargin=*]
-  \item summarizing prior turns;
-  \item retrieving only top-ranked chunks;
-  \item converting verbose tool output into compact fields;
-  
-\end{itemize}
+Selective retention is a design requirement. An agent that stores every piece of
+information it encounters produces a memory that degrades in utility as it accumulates
+noise, outdated facts, and low-confidence inferences. A principled write policy stores
+information when the user has explicitly requested retention, when the fact is stable and
+reusable across future sessions, when storage improves personalisation or session
+continuity in a way the user has consented to, and when the information originates from
+a trusted source. Sensitive information that serves no persistent purpose, temporary
+context that applies only to the current task, and content inferred with low confidence
+warrant exclusion from long-term memory.
 
-Compression can introduce errors. A summary may omit a critical caveat. A memory extractor may store a temporary preference as a permanent one. A retrieval filter may exclude the right document. Therefore memory and context transformations should be evaluated like model outputs.
+The system should expose memory to inspection and correction. A user who can query what
+the agent has retained and modify or delete individual entries has meaningful control over
+the grounding context the agent will assemble in future sessions.
 
-\section{Memory write policy}
+\section{Retrieval-Augmented Generation}
 
-An agent should not remember everything. Memory writes require policy.
+Retrieval-Augmented Generation (RAG) is the standard pattern for grounding model
+responses in external knowledge. It proceeds through four operations. Chunking divides
+source documents into retrieval units of appropriate granularity, each carrying metadata
+that identifies its origin, recency, and scope. Embedding maps each chunk into a vector
+representation that supports semantic similarity search. Retrieval selects the candidate
+chunks most relevant to the current query, typically by combining vector similarity with
+keyword or metadata filters. Context assembly arranges the selected chunks into the
+context window in a form the model can reason from, managing ordering, deduplication, and
+length constraints.
 
-Store information when:
-
-\begin{itemize}[leftmargin=*]
-  \item the user explicitly asks the agent to remember it;
-  \item the fact is stable and useful for future tasks;
-  \item the information improves personalization or continuity;
-  \item the user or organization has consented to storage.
-\end{itemize}
-
-Do not store information when:
-
-\begin{itemize}[leftmargin=*]
-  \item it is sensitive and not needed;
-  \item it is temporary;
-  \item it was inferred with low confidence;
-  \item it came from untrusted content;
-  \item policy requires deletion or non-retention.
-\end{itemize}
-
-The system should support memory inspection and deletion. Users should be able to ask what the agent remembers and correct it.
-
-\section{Knowledge operations}
-
-The knowledge layer performs several operations:
-
-\begin{description}[leftmargin=*]
-  \item[Ingestion.] Convert documents, notes, code, and data into indexed representations.
-  \item[Chunking.] Split content into retrieval units with metadata.
-  \item[Embedding.] Map chunks into vector space.
-  \item[Retrieval.] Select candidate evidence for a query.
-  \item[Context assembly.] Build the final prompt package.
-\end{description}
-
-Each operation is a possible source of failure and should have tests.
+Each of these operations is a potential source of grounding failure and should be tested
+independently. A chunking strategy that splits sentences across unit boundaries degrades
+retrieval precision. An embedding model that has drifted from the domain of the documents
+produces unreliable similarity scores. A retrieval step that returns the highest-scoring
+chunks without diversity may miss the document that contains the correct answer. A context
+assembly step that places the most relevant content at the end of a long context window
+may cause the model to underweight it due to the well-documented lost-in-the-middle
+effect. Treating RAG as a pipeline of testable components rather than a monolithic
+retrieval call is what makes its failure modes diagnosable.
 
 \section{Summary}
 
-The memory and knowledge layer is where prompts, skills, context engineering, RAG and long-term memory belong. It is the layer that decides what the model sees. Better models help, but an agent with poor context will still fail. Production agent design is therefore as much knowledge engineering as model engineering.
+The memory and knowledge layer is where skills, context engineering, long-term memory,
+and retrieval infrastructure belong. Its function is to construct the context window with
+the right information at the right time. Production agent design is therefore as much a
+context engineering discipline as a model engineering one: the quality of the context
+assembled for each task is as consequential as the capability of the model that receives
+it.

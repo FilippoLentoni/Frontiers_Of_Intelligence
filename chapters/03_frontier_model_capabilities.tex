@@ -1,77 +1,150 @@
+```latex
 \chapter{Frontier Model Capabilities}
 
-A frontier model is a model near the leading edge of capability at a given moment. The term does not simply mean ``large.'' It means that the model sits near the current frontier across one or more important dimensions: reasoning, coding, tool use, multimodality, long-context understanding, instruction following, safety behavior, latency, and deployment maturity.
+A frontier model is a model near the leading edge of capability at a given moment. The
+term refers to proximity to the current frontier across one or more consequential
+dimensions: reasoning, coding, tool use, multimodality, long-context understanding,
+instruction following, safety behaviour, latency, and deployment maturity.
 
-For agent builders, frontier models matter because they determine which workflows can be automated with acceptable reliability. A weak model may be useful for extraction, classification, or summarization, but it may fail to maintain a multi-step plan, interpret a failing test suite, or repair a tool call after an error. Stronger models expand the feasible design space.
+For agent builders, frontier models matter because they determine which workflows can be
+automated with acceptable reliability. The capability of the underlying model sets the
+ceiling on the complexity of tasks the agent can handle, the length of reasoning chains
+it can sustain, and the robustness with which it recovers from intermediate errors.
+Selecting a model therefore requires understanding its capability profile across the
+dimensions that the target workflow exercises, rather than relying on aggregate benchmark
+rankings alone.
 
-\section{Open source, open weight, and closed models}
+\section{Open-Weight and Closed Models}
 
-The model ecosystem is often described as a competition between open and closed models, but the terminology needs care.
+The model ecosystem is often described as a competition between open and closed models,
+but the terminology requires precision. Closed or proprietary models are those whose
+weights are withheld from public release. Users access them through an API or hosted
+product, and the provider controls serving, safety behaviour, updates, and pricing.
+Open-weight models are those whose weights are released, typically under a licence that
+may or may not satisfy the formal definition of open source. Users can inspect, host,
+quantise, and in many cases fine-tune them.
 
-\begin{description}[leftmargin=*]
-  \item[Closed or proprietary models.] The model weights are not released. Users access the model through an API or hosted product. The provider controls serving, safety behavior, updates, and pricing.
-  \item[Open-weight models.] The weights are released, often with a license that may or may not satisfy the strict definition of open source. Users can inspect, host, quantize, and sometimes fine-tune the model.
-\end{description}
+This distinction has operational consequences. Closed models are often the most direct
+path to frontier capability. Open-weight models offer control, data privacy, cost
+optimisation, and customisation, but require infrastructure investment and careful
+licence review. In practice, many deployments use both: a closed model for
+reasoning-intensive paths and an open-weight model for high-volume internal workflows
+where cost and latency are primary constraints.
 
-This distinction matters operationally. Closed models are often the easiest way to access frontier capability. Open-weight models offer control, privacy, cost optimization, and customization, but require infrastructure and careful license review. A company may use both: a closed model for the hardest reasoning path and an open-weight model for high-volume internal workflows.
+\section{SWE-bench as a Coding Signal}
 
-\section{SWE-bench as a frontier coding signal}
+SWE-bench evaluates whether a system can resolve real GitHub issues by modifying code
+and passing the repository's own test suite. SWE-bench Verified is a human-validated
+subset of 500 Python instances designed to make evaluation more reliable. The benchmark
+family has expanded as the field has matured: SWE-bench Verified is now approaching
+saturation among frontier models, which has led to adoption of SWE-bench Pro---a
+contamination-resistant variant covering multiple languages---as a more discriminating
+evaluation surface for current capability comparisons.
 
-SWE-bench evaluates whether systems can solve real GitHub issues by modifying code and passing tests. SWE-bench Verified is a human-validated subset of 500 instances designed to make evaluation more reliable. The official SWE-bench Verified page emphasizes that the full leaderboard includes many kinds of coding systems, while the mini-SWE-agent setting is intended to compare language models under a more standardized bash-only agent loop.\footnote{SWE-bench Verified overview: \url{https://www.swebench.com/verified.html}.}
+The critical lesson for agent builders is that a benchmark result reflects a system, not
+a model in isolation. A leaderboard entry is the product of a model, a scaffolding
+strategy, a prompt design, a tool environment, a retry policy, a cost limit, and the
+specific evaluation version used. A well-optimised scaffold around a less capable model
+can outperform a stronger model in a poorly designed harness. The appropriate use of
+benchmark results is therefore to compare systems evaluated under equivalent conditions,
+and to treat performance on the target workflow as the authoritative signal for model
+selection.
 
-This distinction is critical. A leaderboard result is not only a model result. It is a model plus scaffold, prompt, tool environment, retry policy, cost limit, and evaluation version. A weaker model with a highly optimized scaffold can beat a stronger model in a poor scaffold. For book purposes, the correct lesson is not ``memorize the top score.'' The correct lesson is ``compare models inside the workflow you intend to deploy.''
+\section{The Original Transformer}
 
-\section{Architecture 1: the original Transformer}
+The architectural foundation worth understanding is the original Transformer, introduced
+by Vaswani et al.\ in 2017. It comprised an encoder and a decoder, both built from
+multi-head self-attention, position-wise feedforward networks, residual connections,
+layer normalisation, and positional encodings. The encoder processed the full input
+sequence with bidirectional self-attention. The decoder generated output
+autoregressively, using masked self-attention over its own prior outputs and
+cross-attention over the encoder's representations.
 
-The base architecture worth understanding is the original Transformer. It had an encoder, a decoder, multi-head attention, feedforward networks, residual connections, normalization, and positional encodings. The encoder processed the input sequence with full self-attention. The decoder generated output using masked self-attention and cross-attention over encoder states.
+The original design targeted sequence-to-sequence tasks such as machine translation
+rather than general-purpose language modelling. Its lasting contribution was the
+attention mechanism as a content-dependent communication primitive: queries and keys
+determine where the model attends; values carry the content aggregated at each position.
+This separation of relevance from content is what allows a later token to use an earlier
+definition, a function call to attend to its declaration site, or a question to locate
+its answer span across a long document.
 
-The original design was not created specifically for chat agents. It was designed for sequence-to-sequence tasks such as translation. Nevertheless, it introduced the mechanism that made modern LLMs possible: attention as direct content-dependent communication between tokens.
+\section{The Modern Frontier Decoder}
 
-The original architecture can be summarized as:
+Contemporary frontier models are almost universally decoder-only, but the internal block
+has been substantially refined from the original design. The field has converged on a
+representative set of architectural components, reflected across both closed models such
+as GPT, Claude, and Gemini, and open-weight families such as Llama, Qwen, Mistral, and
+DeepSeek.
 
-\begin{enumerate}[leftmargin=*]
-  \item tokenize input;
-  \item embed tokens and positions;
-  \item repeatedly apply attention and feedforward blocks;
-  \item decode output autoregressively;
-  \item train with cross-entropy on target tokens.
-\end{enumerate}
+Causal self-attention replaces the encoder-decoder cross-attention structure, with the
+model attending only to prior positions during generation. Rotary Positional Embeddings
+(RoPE) encode position through rotation applied to query and key vectors rather than
+through additive absolute embeddings, generalising more effectively to sequence lengths
+beyond those seen during training. RMSNorm, applied before each sub-layer rather than
+after, provides training stability with lower computational overhead than the original
+LayerNorm. Grouped-Query Attention, which has become the default for most large models,
+shares key and value projections across groups of query heads, substantially reducing the
+memory footprint of the KV cache during inference without significant loss in model
+quality. SwiGLU, combining a Swish activation with a gated linear unit, has replaced
+earlier activation functions in the feedforward sub-layer and is now the de facto
+standard. FlashAttention-style kernels reorganise the attention computation to minimise
+memory movement between GPU SRAM and HBM, reducing both memory usage and wall-clock
+time. Sparse Mixture-of-Experts feedforward layers activate only a subset of specialised
+sub-networks for each token, allowing a large total parameter count with a much smaller
+active parameter count per forward pass. Multimodal encoders or adapters extend the
+decoder to accept image, audio, or video inputs alongside text.
 
-The important insight is that attention separates \emph{where to look} from \emph{what to aggregate}. Queries and keys determine relevance; values carry content. This is the modeling primitive that lets a later token use an earlier definition, a code function use its call site, or a question attend to an answer span.
+\section{How the Field Evolved}
 
-\section{Architecture 2: a modern frontier decoder}
+The trajectory from the original Transformer to current agentic deployments can be read
+as a sequence of distinct eras, each expanding the scope of what language models could
+do.
 
-Modern frontier LLMs are usually decoder-only, but the internal block has changed substantially. Providers do not always disclose full architectures, so the following is a representative open-weight frontier pattern rather than a claim about every closed model.
+The representation era was defined by encoder-only models such as BERT, which produced
+strong contextual embeddings through bidirectional attention and achieved state-of-the-art
+results on classification, extraction, and ranking tasks. These models established the
+value of deep contextual representations but were designed for understanding rather than
+generation.
 
-A modern block often contains:
+The text-to-text era unified diverse tasks under a single sequence-to-sequence interface.
+Models such as T5 reframed translation, summarisation, question answering, and
+classification as instances of the same text-in, text-out paradigm, demonstrating that
+a single model architecture and training objective could cover a broad range of
+downstream applications.
 
-\begin{itemize}[leftmargin=*]
-  \item causal self-attention instead of encoder-decoder cross-attention;
-  \item rotary or relative positional representations rather than simple absolute position embeddings;
-  \item pre-normalization and RMSNorm-like normalization for training stability;
-  \item grouped-query or multi-query attention to reduce KV-cache memory;
-  \item SwiGLU or related gated feedforward networks;
-  \item FlashAttention-style kernels to reduce memory movement;
-  \item sparse mixture-of-experts feedforward layers in some models;
-  \item long-context training and inference optimizations;
-  \item multimodal adapters or encoders when the model accepts images, audio, or video.
-\end{itemize}
+The autoregressive scaling era established that next-token prediction on massive corpora,
+combined with scaling of data, parameters, and compute, could produce broad and
+transferable capabilities. The GPT family demonstrated this trajectory, and the empirical
+scaling laws that emerged from this period shaped research investment across the field.
 
-\section{How modeling evolved over time}
+The instruction-following era introduced supervised fine-tuning and preference
+optimisation---including reinforcement learning from human feedback---to align base
+models with human instructions. The model's task shifted from text continuation to
+goal-directed response generation, enabling deployment as a general-purpose assistant.
 
-The evolution can be read as a movement from representations, to generation, to agents.
+The reasoning era introduced inference-time compute scaling: models trained with
+verifiable rewards in mathematics, code, and formal settings learned to allocate
+additional computation to difficult problems, producing longer and more deliberate
+reasoning chains before committing to an answer.
 
-\begin{description}[leftmargin=*]
-  \item[Representation era.] Encoder-only models such as BERT produced strong contextual embeddings for classification, extraction, and ranking. They were not general assistants, but they showed the power of bidirectional Transformer representations.
-  \item[Text-to-text era.] Encoder-decoder models such as T5 reframed tasks as text-in/text-out. This unified translation, summarization, question answering, and classification under one interface.
-  \item[Autoregressive scaling era.] Decoder-only models showed that next-token prediction on massive corpora could produce broad capabilities. Scaling data, parameters, and compute became a dominant path.
-  \item[Instruction-following era.] SFT and preference tuning turned base models into assistants. The model was no longer just continuing text; it was following human instructions.
-  \item[Reasoning era.] Models began to allocate more inference-time compute to difficult tasks, often trained with verifiable rewards in math, code, and tool settings.
-  \item[Agentic era.] Models are optimized to call tools, use long context, manage state, and operate inside loops with external feedback.
-\end{description}
+The agentic era optimises models to call tools reliably, maintain coherent state across
+long contexts, and operate within loops that incorporate external feedback from tool
+results and environment observations. This is the setting for which the rest of this
+book provides architectural guidance.
 
-This history explains why agentic AI is not a separate field from language modeling. Agents are the next systems layer built on top of the modeling stack.
+This progression explains why agentic AI is a continuation of the language modelling
+research programme rather than a departure from it. Agents are the systems layer built
+on top of the modelling stack; their capabilities and limitations are directly shaped by
+where the underlying model sits on this trajectory.
 
 \section{Summary}
 
-Frontier models are the capability substrate of agentic systems. The original Transformer introduced attention; modern frontier decoders add long-context mechanisms, efficiency improvements, MoE, post-training, reasoning, tool use, and multimodality. Model selection should be based on a capability profile and evaluated inside the actual agent workflow, not only by isolated benchmark numbers.
+Frontier models are the capability substrate of agentic systems. The original Transformer
+introduced attention as a content-dependent communication mechanism; modern frontier
+decoders extend that foundation with long-context positional representations, efficient
+attention variants, normalisation improvements, sparse mixture-of-experts layers,
+post-training alignment, reasoning optimisation, and multimodal input handling. Model
+selection should be grounded in a capability profile evaluated inside the actual agent
+workflow, with benchmark results interpreted as system-level measurements rather than
+intrinsic model properties.
+```
