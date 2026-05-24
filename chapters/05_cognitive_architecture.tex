@@ -1,11 +1,7 @@
 \chapter{Cognitive Architecture}
 
-The intelligence layer requires a cognitive architecture: an explicit organisation of how
-the model makes decisions over time. In early agentic systems this organisation was often
-implicit, embedded in a single long prompt. In production systems it must be explicit,
-because it is the cognitive architecture that determines which model to invoke, how much
-reasoning to allocate to a given task, whether to retrieve additional context or act on
-what is already known, whether to seek clarification from the user, and when to stop.
+The intelligence layer requires a cognitive architecture which defines how
+the model makes decisions over time.
 
 \section{The Agent Loop}
 
@@ -27,7 +23,7 @@ The standard formulation of this loop, introduced by the ReAct framework (Yao et
 2022), interleaves reasoning and acting in three repeating stages. In the thought stage,
 the model generates an internal reasoning trace: it analyses the current state of the
 task and determines what action is most likely to advance it. In the action stage, it
-executes that action---calling a tool, retrieving context, producing a partial answer,
+executes that action by calling a tool, retrieving context, producing a partial answer,
 or requesting clarification. In the observation stage, it receives the result of the
 action and incorporates it into its reasoning before the next thought. This
 thought-action-observation cycle continues until a termination condition is met. The
@@ -35,44 +31,11 @@ critical property of the loop is that the agent learns from each observation bef
 deciding on the next step: a tool call that returns an error is an observation that
 informs the subsequent thought, rather than a terminal failure.
 
-\section{State and the Reasoning Trace}
-
 For the loop to function across multiple iterations, the agent must maintain state.
 State is the accumulated record of what the agent has done and learned: the user's
 original input, the message history, retrieved documents, tool outputs, the current
 plan, completed steps, unresolved questions, and accumulated cost.
 
-The most important architectural distinction within state is between observations and
-the reasoning trace. An observation is a fact returned by an external source---a tool
-output, a retrieved document, a user message, a test result. The reasoning trace is the
-agent's own internal thought: a hypothesis about why a test is failing, a candidate plan
-for the next steps, an interpretation of an ambiguous user request. Conflating these two
-categories is a primary source of hallucination and reasoning failure. An agent that
-treats its own reasoning trace as though it were an observed fact will build subsequent
-steps on an unverified foundation and propagate the error forward through the loop.
-
-A sound architectural practice is to maintain a clear separation between what the agent
-has observed and what it has inferred. The final response should be grounded in
-observations---facts returned by external sources---rather than in intermediate reasoning
-steps that were never confirmed by a subsequent observation. This discipline is what
-allows an agent to recover from an incorrect initial hypothesis: when a reasoning trace
-leads to an action whose observation contradicts the hypothesis, the agent can revise its
-reasoning and converge on a correct solution rather than compounding the error.
-
-\section{Deliberation Budgets}
-
-Reasoning is a resource, and a well-designed cognitive architecture makes its allocation
-explicit. A deliberation budget specifies, for a given task or task class, the model to
-be used, the maximum number of output tokens, the permitted number of tool iterations,
-the number of retrieval rounds, and whether the system employs self-checking or
-verification passes. These parameters collectively determine both the cost and the
-quality ceiling of the agent's response.
-
-The budget should be visible in the execution trace. A task that consumes substantially
-more deliberation than its complexity warrants represents a cost failure; a task whose
-complexity exceeds the deliberation allocated to it represents a quality failure. Making
-the budget explicit transforms these from invisible degradations into diagnosable
-conditions.
 
 \section{Clarification and Autonomy}
 
@@ -97,27 +60,11 @@ Because the loop has no natural end when the task is open-ended, the cognitive
 architecture must specify explicit termination conditions. Without them the agent
 continues iterating past the point at which the task is complete, consuming budget and
 potentially degrading a solution that was already correct.
-
-Termination conditions fall into four classes. Success-based termination occurs when the
-required output has been produced and verified---the test passes, the requested document
-has been retrieved and confirmed relevant, the generated artefact meets the specified
-criteria. Budget-based termination occurs when the agent has exhausted its allocation of
-tool calls, tokens, time, or cost. Safety-based termination occurs when the next action
-would require permissions that the user or policy has withheld. Uncertainty-based
-termination occurs when the agent cannot make further progress autonomously and a human
-decision is required to proceed.
-
-A property of this architecture that deserves explicit attention is that success-based
-termination is itself a model judgment, rather than a deterministic rule. The agent uses
+Loop termination is itself a model judgment, rather than a deterministic rule. The agent uses
 the language model to assess whether the current state of the task satisfies the original
 goal. This means the stopping decision is subject to the same reasoning capabilities and
 failure modes as any other step in the loop: the model may judge a task complete when it
-is not, or continue iterating when sufficient evidence already exists. Budget-based
-termination is the only class that is enforced deterministically by the framework rather
-than decided by the model. This asymmetry---model-judged success, framework-enforced
-budget---is a structural property of the cognitive architecture that the evaluation layer
-must account for, by measuring not only whether the agent reached a correct answer but
-whether it stopped at the right point.
+is not, or continue iterating when sufficient evidence already exists.
 
 \section{Summary}
 

@@ -41,93 +41,11 @@ def echo(message: str) -> dict[str, str]:
 
 These two tools illustrate the pattern: a decorated function, a docstring that the model
 uses to decide when to call the tool, and a typed return value. In practice, built-in tools
-handle lightweight operations that do not require a gateway round-trip---simple lookups,
+handle lightweight operations that do not require a gateway round-trip, such as simple lookups,
 formatting, or diagnostic checks. The more capable tools are loaded dynamically from the
 AgentCore Gateway at startup, as described in the next section.
 
-\section{Step 2: Authenticate to the gateway with SigV4}
-
-Because the AgentCore Gateway enforces IAM authentication on every inbound request, the
-agent must sign each HTTP call with AWS Signature Version 4 before sending it. This is the
-standard authentication pattern for any AWS workload calling an IAM-protected service
-endpoint---the same pattern used when a container calls S3, DynamoDB, or any other AWS API
-directly. Since the MCP client uses \texttt{httpx} for transport, the signing logic is
-implemented as a custom \texttt{httpx.Auth} subclass that resolves the container's
-execution role credentials via \texttt{botocore} and attaches the required headers to each
-request.
-
-It is important to note that this signing layer covers only the agent-to-gateway leg of the
-call. Once the request reaches the gateway, authentication to backend tools such as Lambda
-functions is handled by the gateway itself using its own service role. The agent code is
-never responsible for signing those outbound calls.
-
-\begin{lstlisting}[language=Python]
-import hashlib
-from urllib.parse import urlparse
-
-import botocore.session
-import httpx
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
-
-SERVICE_NAME = "bedrock-agentcore"
-
-class SigV4HTTPAuth(httpx.Auth):
-    requires_request_body = True
-
-    def __init__(self, service: str, region: str,
-                 credentials=None):
-        self.service = service
-        self.region = region
-        self.credentials = credentials
-
-    def auth_flow(self, request: httpx.Request):
-        creds = self._resolve_creds()
-        body = bytes(request.content) if request.content else b""
-        signed_headers = self._sign(request, body, creds)
-        yield httpx.Request(
-            method=request.method,
-            url=request.url,
-            headers=signed_headers,
-            content=body,
-        )
-
-    def _resolve_creds(self):
-        if self.credentials:
-            return self.credentials
-        session = botocore.session.get_session()
-        creds = session.get_credentials()
-        if not creds:
-            raise RuntimeError("AWS credentials not found")
-        return creds
-
-    def _sign(self, request, body, creds):
-        parsed = urlparse(str(request.url))
-        headers = {
-            "Host": parsed.netloc,
-            "Content-Type": "application/json",
-            "Content-Length": str(len(body)),
-            "X-Amz-Content-Sha256": hashlib.sha256(
-                body
-            ).hexdigest(),
-        }
-        aws_req = AWSRequest(
-            method=request.method,
-            url=str(request.url),
-            data=body,
-            headers=headers,
-        )
-        SigV4Auth(
-            creds, self.service, self.region
-        ).add_auth(aws_req)
-        return dict(aws_req.headers)
-\end{lstlisting}
-
-This class is shared across both framework implementations. Any HTTP request sent through
-this auth handler has its body hashed, its headers signed, and its timestamp included
-before it leaves the agent container.
-
-\section{Step 3: Load gateway tools over MCP}
+\section{Step 2: Load gateway tools over MCP}
 
 Gateway tools arrive via the MCP protocol. The two frameworks use different MCP clients,
 so the gateway loading code diverges here. Strands uses \texttt{MCPClient} from the
@@ -234,7 +152,7 @@ fresh MCP session, executes the tool, and closes the session. This means the Lan
 implementation does not require session affinity at the container level, but it incurs a
 small per-call connection overhead.
 
-\section{Step 4: Encode operating procedures in SKILL.md}
+\section{Step 3: Encode operating procedures in SKILL.md}
 
 Tools tell the agent \emph{how} to call a capability. A skill tells the agent \emph{when}
 and \emph{why} to use capabilities in a particular order. The assistant has one skill: a
@@ -327,7 +245,7 @@ The frontmatter parser keeps the logic minimal: it reads YAML keys without a YAM
 so the agent package stays lean. Strands consumes the skills directory through a plugin.
 LangGraph reads the full document content and embeds it in the system prompt.
 
-\section{Step 5: Build the Strands agent}
+\section{Step 4: Build the Strands agent}
 
 Strands takes a declarative approach. The developer provides a model, a session manager,
 plugins, tools, and a system prompt. The framework owns the agent loop: it decides when to
@@ -427,11 +345,11 @@ trade-off: because Strands holds stateful MCP client connections through the
 \texttt{GatewayToolPool}, reusing a container across sessions would corrupt session state.
 AgentCore Runtime handles this constraint by routing requests to the correct container.
 
-\section{Step 6: Build the LangGraph agent}
+\section{Step 5: Build the LangGraph agent}
 
 LangGraph makes the agent loop explicit. The developer builds a graph with nodes, edges,
 and hooks. The prebuilt \texttt{create\_react\_agent} supplies a default ReAct
-loop---model call, tool call, observation, repeat---but every part of the loop can be
+loop: model call, tool call, observation, repeat. However, every part of the loop can be
 extended, replaced, or instrumented.
 
 \paragraph{Memory components.}
@@ -595,7 +513,7 @@ the skill registry reads each \texttt{SKILL.md} document and the
 \texttt{\_build\_system\_prompt} function formats them into a single prompt block. There
 is no plugin; the developer controls the skill injection point directly.
 
-\section{Step 7: The entrypoint and session identity}
+\section{Step 6: The entrypoint and session identity}
 
 Both implementations wrap the agent in a \texttt{BedrockAgentCoreApp} and expose an
 \texttt{@app.entrypoint} function. The entrypoint is the interface between the AgentCore
@@ -717,7 +635,7 @@ awaits the full graph result and yields one final response. This reflects a deep
 difference: Strands is streaming-first by design, while LangGraph's \texttt{ainvoke}
 returns a completed state.
 
-\section{Step 8: The full picture}
+\section{Step 7: The full picture}
 
 With every component defined, the two agents have the same external shape. Both accept a
 prompt over the AgentCore Runtime boundary. Both authenticate to the same MCP gateway
@@ -791,14 +709,14 @@ Control flow
 
 The practical question is where complexity lives in the system.
 
-If complexity lives in the tools and operating procedures---the skill is detailed, the
+If complexity lives in the tools and operating procedures: the skill is detailed, the
 gateway exposes many capabilities, the conversation requires careful tool
-sequencing---Strands keeps the application code compact while the skill documents carry
+sequencing. Strands keeps the application code compact while the skill documents carry
 the domain logic. The framework handles the loop; the developer handles the domain.
 
-If complexity lives in the orchestration itself---the agent must coordinate deterministic
+If complexity lives in the orchestration itself: the agent must coordinate deterministic
 steps with model-driven steps, expose checkpoints for human approval, branch on
-domain-specific conditions, or make memory injection visible for evaluation---LangGraph
+domain-specific conditions, or make memory injection visible for evaluation. LangGraph
 provides explicit structure for representing and testing each part of the trajectory.
 
 Both frameworks integrate with AgentCore Runtime, AgentCore Gateway, and AgentCore Memory.
@@ -810,8 +728,8 @@ in the graph itself.
 Both implementations accept a prompt over the AgentCore Runtime boundary, authenticate to
 the MCP gateway with SigV4, load tools from the gateway, follow skill-encoded operating
 procedures, and persist state through AgentCore Memory. The gateway authentication
-pattern---signing each inbound request with the container's IAM execution role
-credentials---is the standard approach for any AWS workload calling an IAM-protected
+pattern, signing each inbound request with the container's IAM execution role
+credentials, is the standard approach for any AWS workload calling an IAM-protected
 service endpoint, and applies equally to both frameworks. What differs is the agent loop.
 Strands declares an agent and delegates loop control to the framework. LangGraph builds an
 explicit graph with hooks, memory components, and a system prompt that includes skill

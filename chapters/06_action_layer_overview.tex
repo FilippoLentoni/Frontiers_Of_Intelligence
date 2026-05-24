@@ -27,13 +27,13 @@ tools have overlapping descriptions, the model resolves the ambiguity arbitraril
 argument names are vague, parameters are filled incorrectly. When output fields are
 verbose or unstructured, the model may extract the wrong field or ignore the result
 entirely. Research has confirmed that poor schema design is a primary driver of tool
-hallucination---cases where the model selects the wrong tool, supplies malformed
+hallucination, cases where the model selects the wrong tool, supplies malformed
 parameters, or bypasses the tool entirely and fabricates an output that mimics what the
 tool would have returned. The schema is therefore a behavioural control: its precision
 determines the quality of the agent's decisions at the action boundary.
 
 The following example illustrates a well-formed tool definition using the Strands
-decorator pattern introduced in chapter~8. The name is unambiguous, the description
+decorator pattern used later in the implementation chapters. The name is unambiguous, the description
 specifies both the purpose and the condition for use, arguments are typed with explicit
 constraints, and the return type is structured:
 
@@ -70,7 +70,7 @@ def get_job_status(job_id: str) -> JobStatusResult:
 \end{lstlisting}
 
 Several design choices are worth making explicit. The description instructs the model
-both when to call the tool and when to refrain---this negative condition is as important
+both when to call the tool and when to refrain. This negative condition is as important
 as the positive one because it reduces spurious invocations. The return type is a typed
 Pydantic model rather than a raw dictionary, which enforces the output contract at the
 Python level and makes the schema visible to the framework. The \texttt{summary} field
@@ -80,25 +80,25 @@ without having to synthesise one from the structured fields.
 \section{Read Tools and Write Tools}
 
 Tools differ in their side effects, and that difference governs the level of autonomy
-the agent is granted. Read tools---search, retrieval, inspection, calculation---carry no
-persistent consequences and are appropriate for autonomous invocation. Write tools---those
-that modify external state, send communications, or trigger processes---might require
+the agent is granted. Read tools, including search, retrieval, inspection, calculation, carry no
+persistent consequences and are appropriate for autonomous invocation. Write tools, those
+that modify external state, send communications, or trigger processes, might require
 explicit authorisation in the schema and, for consequential operations, a human approval
 step before execution.
 
 \section{Agent-as-Tool and the Opacity Problem}
 
-When a subtask is sufficiently complex to warrant its own reasoning loop---a research
+When a subtask is sufficiently complex to warrant its own reasoning loop, such as a research
 task that requires searching multiple sources, a code review that requires inspecting a
 patch against a set of criteria, a planning task that decomposes a broad request into
-ordered steps---it can be encapsulated as a sub-agent and exposed to the parent agent as
+ordered steps, it can be encapsulated as a sub-agent and exposed to the parent agent as
 a tool. The parent agent supplies an input and receives an observation; the internal
 execution is hidden.
 
 This pattern introduces a structural opacity problem. The parent agent cannot inspect
 the sub-agent's intermediate decisions unless the sub-agent exposes them through a shared
 tracing infrastructure. Research on multi-agent failure modes has found that coordination
-breakdowns---failures at precisely this boundary---represent the largest single category
+breakdowns, failures at precisely this boundary, represent the largest single category
 of failure in production multi-agent systems. The consequence is that an agent-as-tool
 pattern requires nested traces: the sub-agent's execution must appear as a child span
 within the parent trace, with its tool calls, intermediate reasoning, and output all

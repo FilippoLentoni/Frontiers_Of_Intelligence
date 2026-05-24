@@ -1,4 +1,3 @@
-```latex
 \chapter{Tools, Function Calling, and MCP}
 
 The Model Context Protocol (MCP) is a standardised interface for exposing tools, prompts,
@@ -61,8 +60,8 @@ be shared or brought under organisational governance.
 Tool call validation occurs in two distinct places, and conflating them is a common
 source of production failures. The first is structural validation: the agent framework
 checks that the model's emitted arguments conform to the tool's schema before the tool
-is invoked. When a tool's input type is declared precisely---using typed function
-signatures and constrained field definitions---the framework can enforce this contract
+is invoked. When a tool's input type is declared precisely, using typed function
+signatures and constrained field definitions, the framework can enforce this contract
 automatically and fail early if the model's output does not conform. The second is
 authorisation: an independent component verifies that the caller's identity is permitted
 to invoke the requested capability. This separation ensures that schema conformance and
@@ -78,8 +77,8 @@ previous chapter. At the observability level, the agent's user interface should 
 which tools were called and with what arguments, making the model's action choices
 visible to the user rather than concealing them behind a final answer. At the output
 level, the model can be instructed to include a structured attestation field in its
-response---for example, a flag indicating that a consequential action such as submitting
-a payment was executed---which creates an explicit, checkable link between the model's
+response, for example, a flag indicating that a consequential action such as submitting
+a payment was executed, which creates an explicit, checkable link between the model's
 stated behaviour and the tool invocations recorded in the trace. These mitigations are
 complementary: schema design reduces the rate of hallucination, observability surfaces
 instances that occur, and structured attestation makes them detectable in automated
@@ -94,4 +93,3 @@ every invocation inspectable. The distinction between local and remote tools is 
 governance boundary as much as an architectural one: the point at which a tool moves to
 a remote endpoint is the point at which organisational identity, policy, and audit
 controls become enforceable.
-```

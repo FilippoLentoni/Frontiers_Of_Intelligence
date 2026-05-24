@@ -3,7 +3,7 @@
 Evaluating an agentic system requires choosing, at the outset, what the evaluation is 
 intended to measure. The simplest approach is outcome-based evaluation: given a task, did 
 the agent produce the correct final answer? Its limitation is that a correct answer carries 
-no information about the path taken to reach it---an agent may succeed on a given instance 
+no information about the path taken to reach it. An agent may succeed on a given instance 
 through a sequence of steps that is inefficient, brittle, or unlikely to generalise.
 
 Trajectory-based evaluation addresses this by treating the sequence of decisions as the 
@@ -12,7 +12,7 @@ evaluator inspects the full sequence of tool calls, retrieval steps, and interme
 reasoning: whether the right tools were selected, whether they were invoked with valid 
 arguments, and whether each step was necessary given the state of the task at that point. 
 This approach is more demanding to instrument and score, but it produces a more diagnostic 
-picture of system behaviour---one that can distinguish a robust agent from one that happens 
+picture of system behaviour, one that can distinguish a robust agent from one that happens 
 to succeed on the test distribution.
 
 \section{Traces}
@@ -38,16 +38,16 @@ relevant dimensions include whether the agent satisfied the user's objective, wh
 claims are correct, and whether assertions are grounded in retrieved evidence or tool outputs. 
 At the trajectory level, relevant dimensions include whether the agent selected appropriate 
 tools, whether arguments were valid and complete, and whether tool results were correctly 
-incorporated into subsequent reasoning. Orthogonal to both are efficiency scores---whether 
-the task was completed within acceptable cost and latency budgets---and safety scores, which 
+incorporated into subsequent reasoning. Orthogonal to both are efficiency scores, measuring whether 
+the task was completed within acceptable cost and latency budgets, and safety scores, which 
 assess whether the agent respected applicable permissions and constraints.
 
 \section{Datasets and Experiments}
 
 Langfuse supports input/expected-output datasets as the baseline format for offline 
 evaluation. As the system is deployed and production traces accumulate, the dataset can be 
-versioned and progressively enriched: traces flagged during online audit---where the agent 
-failed or behaved unexpectedly---become new labelled examples in the next dataset version. 
+versioned and progressively enriched: traces flagged during online audit, where the agent 
+failed or behaved unexpectedly, become new labelled examples in the next dataset version. 
 This mechanism ensures that the evaluation suite tracks the actual failure modes encountered 
 in production, and that fixes introduced in a new agent version are verified against the 
 exact conditions that exposed the original defect.
@@ -57,8 +57,8 @@ exact conditions that exposed the original defect.
 Production traffic is rarely uniform. In a typical deployment, the majority of conversations 
 receive no explicit feedback, a small fraction receive a positive signal such as a thumbs-up, 
 and a smaller fraction still receive a negative signal. Annotating a simple random sample of 
-this traffic would leave the most informative cases---those where the agent visibly 
-failed---severely underrepresented.
+this traffic would leave the most informative cases, especially those where the agent visibly 
+failed, severely underrepresented.
 
 Stratified sampling addresses this by partitioning traffic into buckets and allocating 
 annotation capacity to each bucket independently. In the feedback example, the natural 

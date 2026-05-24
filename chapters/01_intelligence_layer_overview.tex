@@ -1,11 +1,7 @@
 \chapter{The Anatomy of an Agent}
 
 An agentic AI system combines a foundation model with the infrastructure required to
-make it useful: tools, memory, security controls, evaluation loops, and deployment
-machinery. The foundation model provides the core reasoning and generation capability,
-but the system acquires operational utility only when that capability is connected to
-context, actions, and governance. This book is organised around a decomposition of that
-architecture into four layers: the intelligence layer, the action layer, the memory and
+make it useful: tools, memory, security. This book is organised around a decomposition of Agentic AI into four layers: the intelligence layer, the action layer, the memory and
 knowledge layer, and the security layer. These layers are conceptually distinct but
 continuously interdependent in production: the model reasons over context assembled by
 the memory layer, selects actions exposed by the action layer, and operates within
@@ -17,15 +13,15 @@ four, measuring whether the full system behaves correctly at each step and over 
 The first layer is the \emph{intelligence layer}. In this book, the intelligence layer
 encompasses two tightly coupled components: the foundation model, which provides the
 core reasoning and generation capability, and the cognitive architecture, which governs
-how the model pursues a goal across multiple steps---deciding when to act, when to
+how the model pursues a goal across multiple steps, deciding when to act, when to
 retrieve, when to seek clarification, and when to stop. The subsequent chapter explains
 how these models work, beginning with the original Transformer architecture and
 progressing toward the design choices that characterise modern frontier models.
 
 The second layer is the \emph{action layer}. This layer enables the agent to produce
 effects beyond generating text. It encompasses function calling, APIs, tools, MCP
-servers, browser automation, code execution, and agent-as-tool patterns. Some tools are
-deterministic---a calculator, a database query, an inventory lookup---while others are
+servers and agent-as-tool patterns. Some tools are
+deterministic, such as a calculator, while others are
 stochastic, such as a sub-agent that performs research, writes code, or produces a
 judgment. Together they define the set of effects the agent can produce in the world
 beyond generating text.
@@ -33,7 +29,7 @@ beyond generating text.
 The third layer is the \emph{memory and knowledge layer}. This layer determines what
 information is available to the model at the moment of decision. It includes short-term
 conversation state, long-term user and organisational memory, retrieval-augmented
-generation, knowledge bases, documents, vector stores, context engineering, and reusable
+generation, knowledge bases, documents, vector stores and reusable
 skills. In this book, skills are treated as a form of procedural knowledge: versioned,
 retrievable packages of instructions or patterns that improve the reliability with which
 the agent performs recurring tasks. The quality of this layer is as consequential as the
@@ -52,7 +48,7 @@ agent's permitted actions.
 \section{From Anatomy to Implementation}
 
 The architecture described above provides the conceptual foundation for the rest of the
-book. The chapters that follow develop each layer in depth---how foundation models are
+book. The chapters that follow develop each layer in depth: how foundation models are
 trained and how they reason, how the action layer is designed and governed, how the
 memory and knowledge layer is constructed and evaluated, and how the security layer is
 enforced in production. The application section then demonstrates how these layers
@@ -62,7 +58,3 @@ loop between offline evaluation, production traces, human feedback, and future e
 datasets. The goal is to give the reader the conceptual and practical tools to build an
 agent that can be tested, monitored, improved, and deployed through a governed production
 pipeline in their own domain.
-
-The book concludes with the organisational model required to build and sustain an
-AI-first company: the teams, processes, and governance structures that allow the
-technical architecture to operate reliably at scale.

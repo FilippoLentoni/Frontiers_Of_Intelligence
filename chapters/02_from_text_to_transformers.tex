@@ -1,7 +1,7 @@
 \chapter{Foundation Models}
 
-The Transformer architecture is the substrate on which modern language models---and
-therefore agentic AI systems---are built. This chapter explains the modelling foundations
+The Transformer architecture is the substrate on which modern language models and
+therefore agentic AI systems are built. This chapter explains the modelling foundations
 needed for the rest of the book: how text becomes tokens, how tokens become vectors, and
 why decoder-only Transformers became the default architecture for general-purpose
 assistants.
@@ -10,8 +10,7 @@ assistants.
 
 Before a model can process text, that text must be converted into tokens: discrete units
 such as words, subwords, bytes, or characters. Tokenisation shapes cost, context length,
-and multilingual behaviour, and is therefore a consequential design decision rather than
-a minor preprocessing detail.
+and multilingual behaviour.
 
 Subword tokenisation, implemented through algorithms such as Byte-Pair Encoding, is the
 approach used by most modern language models. Common words are represented as a single
@@ -21,14 +20,12 @@ vocabulary size against sequence length more effectively than word-level or
 character-level alternatives.
 
 For agent builders, tokenisation has direct engineering consequences: the cost and
-context capacity of any operation scale with token count rather than character count,
-making token-aware context engineering a production requirement.
+context capacity of any operation scale with token count.
 
 \section{Embeddings and Representation Geometry}
 
 After tokenisation, each token is mapped to a dense vector called an embedding. Dense
-embeddings place tokens in a learned vector space where similar meanings, syntactic
-roles, and usage patterns tend to occupy related regions, expressing semantic relatedness
+embeddings place tokens in a learned vector space where similar meanings tend to occupy related regions, expressing semantic relatedness
 as geometric proximity.
 
 The same principle underlies retrieval. A document chunk and a query can both be
@@ -45,7 +42,7 @@ but imposed two significant constraints: long-range dependencies were difficult 
 maintain as information from early tokens could fade across the sequence, and training
 was difficult to parallelise because later hidden states depended on earlier ones.
 
-Agentic workloads routinely require long-range dependencies---connecting a term defined
+Agentic workloads routinely require long-range dependencies, connecting a term defined
 early in a contract to its use later, or a failing test to the function responsible for
 it across multiple files. The Transformer addressed both constraints simultaneously, and
 its dominance in production systems reflects how consequential those constraints were in
@@ -54,8 +51,8 @@ practice.
 \section{Self-Attention}
 
 Self-attention allows each token to directly compare itself to every other token in the
-sequence. For each position, the model constructs three learned projections---a query, a
-key, and a value---where the query represents what the token is looking for, the key
+sequence. For each position, the model constructs three learned projections: a query, a
+key, and a value, where the query represents what the token is looking for, the key
 represents what another token offers for matching, and the value represents the content
 to be aggregated.
 
@@ -115,10 +112,6 @@ absolute positional encodings to token embeddings; modern frontier models use Ro
 Positional Embeddings (RoPE), which encode position through the attention computation
 itself and generalise more effectively to long sequences.
 
-For agentic systems, positional design carries practical significance because context
-windows spanning hundreds of thousands of tokens are now common, and the quality of
-positional representations at those lengths directly affects reasoning quality.
-
 \section{Inference: Logits, Decoding, and Structured Output}
 
 At inference time, a decoder-only model produces a distribution over the vocabulary at
@@ -126,19 +119,13 @@ each step as a vector of logits. Greedy decoding selects the highest-probability
 sampling introduces stochasticity controlled by temperature, top-$k$, and top-$p$
 parameters.
 
-Structured agent outputs require additional discipline. When a model must produce a
-valid JSON object for a tool call, the system may rely on prompting conventions, retry
-logic after schema validation failure, or constrained decoding that restricts generation
-to schema-valid tokens at each step---a trade-off between flexibility, latency, and
-conformance reliability.
-
 \section{Why This Matters for Agents}
 
 Every agentic capability is built on these modelling primitives: tool calls are generated
 token sequences, retrieved documents and memory summaries are context tokens, plans are
 generated text, and cost and latency scale with total token count. Understanding
 Transformers at this level supports the engineering decisions that follow in every
-subsequent chapter---how to manage context, when to constrain generation, why retrieval
+subsequent chapter: how to manage context, when to constrain generation, why retrieval
 precision matters, and how model capability translates into agent reliability.
 
 \section{Summary}
@@ -148,5 +135,5 @@ token a direct path to every other token in a form that modern hardware can exec
 efficiently. Decoder-only Transformers became the default for large generative models
 because next-token prediction scales cleanly and supports open-ended generation. Agents
 are built by placing this generative engine inside a stateful loop with tools, memory,
-context engineering, and security boundaries---the layers this book addresses in the
+context engineering, and security boundaries, the layers this book addresses in the
 chapters that follow.

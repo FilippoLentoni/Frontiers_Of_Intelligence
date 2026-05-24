@@ -12,8 +12,8 @@ built.
 The concept of an attack surface describes the set of entry points through which an
 adversary can influence a system's behaviour. In agentic systems, this surface is
 substantially wider than in conventional applications. The model's context window is an
-attack vector: every piece of content that enters it---retrieved documents, tool outputs,
-emails, web pages, tickets, and code---can contain instructions that attempt to redirect
+attack vector: every piece of content that enters it, including retrieved documents, tool
+outputs, emails, web pages, tickets, and code, can contain instructions that attempt to redirect
 the model's behaviour. The agent's memory is a further attack vector: content written
 into long-term memory during one session can influence the model's reasoning in future
 sessions, a class of attack known as memory poisoning. The tools themselves constitute a
@@ -22,7 +22,7 @@ over persistent storage can be induced to exercise those capabilities in ways th
 not authorised.
 
 The principle of least privilege is the foundational response to this expanded attack
-surface. Each component of the system---the agent, each tool, each memory store---should
+surface. Each component of the system, including the agent, each tool, and each memory store, should
 hold only the permissions required to perform its declared function, scoped to the
 current task, and enforced by the infrastructure rather than assumed from the model's
 compliance with its system prompt. In agentic contexts, least privilege means limiting
@@ -30,12 +30,36 @@ an agent's access to only the resources and actions explicitly required to compl
 current task, not its general purpose, its potential future tasks, or everything it might
 conceivably need.
 
+\section{Identity, Authentication, and Authorisation}
+
+Every request in an agentic system should be associated with an identity. That identity
+may belong to a human user, a service account, a tenant, an organisation, an agent, or
+a tool. In multi-agent systems, the agent itself carries an identity so that downstream
+tools can distinguish between a direct human request and an automated action, a
+distinction that matters for audit, for permission scoping, and for accountability.
+
+Authentication and authorisation operate at two boundaries. Inbound authentication
+verifies the user or client calling the agent. Outbound authorisation verifies, before
+any tool executes, whether the authenticated identity holds the permission required to
+invoke it. When a tool must call a downstream service, the credentials for that call
+should be scoped, rotated, and injected into the tool execution environment by a secrets
+manager rather than passed through the model. The model may know that a user holds a
+particular role; it should have no visibility into OAuth tokens, API keys, or database
+connection strings.
+
+Permissions should be scoped along multiple axes: user or tenant, data source, tool,
+action type, environment, time window, budget, and approval requirement. A deployment
+agent, for example, may be permitted to run tests in any branch, deploy to a staging
+environment after automated checks pass, and deploy to production only after an
+authorised engineer has approved the change. Each axis of scoping reduces the consequence
+of a compromised or misdirected action.
+
 \section{Prompt Injection}
 
 Prompt injection occurs when content from an untrusted source attempts to redirect the
 model's behaviour. Direct injection arrives in the user's own message. Indirect injection
-is embedded in content the agent retrieves or processes---a web page, a PDF, an email
-body, a repository file, or a tool output---and is particularly consequential because the
+is embedded in content the agent retrieves or processes, such as a web page, a PDF, an email
+body, a repository file, or a tool output, and is particularly consequential because the
 user may have no visibility into the injected instruction.
 
 The primary structural mitigations are architectural. Context should be labelled by
@@ -48,6 +72,23 @@ be explicitly governed. Write operations should require approval for consequenti
 actions. High-risk tools should operate against an allowlist. Every consequential action
 should be logged with sufficient context to reconstruct the decision that produced it.
 Infrastructure enforcement is what gives these controls their guarantee.
+
+\section{Guardrails}
+
+Guardrails are validation controls placed at specific points in the agent's execution
+pipeline, enforcing boundaries that the model itself cannot reliably enforce. An input
+guardrail inspects the user's request before it reaches the model, blocking unsafe or
+unsupported inputs. A retrieval guardrail restricts which documents are accessible during
+context assembly, for example by applying tenant-specific index filters. A tool guardrail
+validates a tool call before execution, blocking actions such as sending an external
+communication that contains sensitive data. An output guardrail inspects the model's
+final response, redacting personal data or flagging policy violations before the response
+reaches the user. A policy guardrail enforces business rules such as requiring human
+approval above a cost threshold. A runtime guardrail constrains the execution environment
+itself, sandboxing shell access and network calls to prevent lateral movement.
+
+The common property across all guardrail types is that they operate independently of the
+model. The model may propose an action; the guardrail determines whether it executes.
 
 \section{Data Flow Control}
 
@@ -65,9 +106,9 @@ infrastructure layer, enforced at the tool boundary.
 
 \section{Human Approval}
 
-For actions that are irreversible or consequential---modifying or deleting records,
+For actions that are irreversible or consequential, such as modifying or deleting records,
 deploying code, submitting a financial or legal document, or sharing internal data
-outside the organisation---a human approval step is one available control. The
+outside the organisation, a human approval step is one available control. The
 appropriate level of human oversight depends on the risk profile of the action and the
 degree of automation the use case requires. A fully automated pipeline may accept higher
 risk in exchange for throughput; a governed enterprise deployment may route every write
@@ -83,8 +124,8 @@ dataset and regression tests for subsequent agent versions.
 \section{Sandboxing}
 
 A sandbox is an environment that replicates production conditions without connecting to
-production systems. In a staged deployment pipeline, the sandbox stage---typically
-referred to as gamma---is where the agent is tested against realistic data and realistic
+production systems. In a staged deployment pipeline, the sandbox stage, typically
+referred to as gamma, is where the agent is tested against realistic data and realistic
 tool schemas before any change is promoted to production. The CI/CD pipeline should
 include a sandbox stack where prompt changes, tool schema updates, and new agent
 capabilities can be exercised and evaluated in isolation. Capabilities validated in the
@@ -104,10 +145,12 @@ possible to reproduce and evaluate historical behaviour as the system evolves.
 \section{Summary}
 
 The security and governance layer enforces the boundaries within which the agent
-operates. The attack surface of an agentic system spans the context window, the memory
-layer, and the tool interfaces; the principle of least privilege is the foundational
-response to each. Prompt injection, data flow control, human approval calibrated to the
-risk profile of each action, sandboxed validation before promotion, and structured
-auditability are the core concerns of this layer. Each of them is an infrastructure
-property enforced independently of the model, and each connects directly to the
-evaluation and deployment practices covered in subsequent chapters.
+operates. The attack surface spans the context window, the memory layer, and the tool
+interfaces; the principle of least privilege is the foundational response to each.
+Identity, authentication, and authorisation establish who may act and on what. Guardrails
+enforce boundaries at every stage of the execution pipeline independently of the model.
+Prompt injection, data flow control, human approval calibrated to the risk profile of
+each action, sandboxed validation before promotion, and structured auditability are the
+core concerns of this layer. Each of them is an infrastructure property enforced
+independently of the model, and each connects directly to the evaluation and deployment
+practices covered in subsequent chapters.
