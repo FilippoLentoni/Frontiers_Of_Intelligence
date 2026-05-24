@@ -18,7 +18,6 @@
 
 # Build output
 build/
-main.pdf
 
 # Content directories
 applications/
