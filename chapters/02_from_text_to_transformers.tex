@@ -42,12 +42,6 @@ but imposed two significant constraints: long-range dependencies were difficult 
 maintain as information from early tokens could fade across the sequence, and training
 was difficult to parallelise because later hidden states depended on earlier ones.
 
-Agentic workloads routinely require long-range dependencies, connecting a term defined
-early in a contract to its use later, or a failing test to the function responsible for
-it across multiple files. The Transformer addressed both constraints simultaneously, and
-its dominance in production systems reflects how consequential those constraints were in
-practice.
-
 \section{Self-Attention}
 
 Self-attention allows each token to directly compare itself to every other token in the

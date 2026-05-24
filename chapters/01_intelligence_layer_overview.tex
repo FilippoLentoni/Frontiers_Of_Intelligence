@@ -1,8 +1,8 @@
 \chapter{The Anatomy of an Agent}
 
-An agentic AI system combines a foundation model with the infrastructure required to
-make it useful: tools, memory, security. This book is organised around a decomposition of Agentic AI into four layers: the intelligence layer, the action layer, the memory and
-knowledge layer, and the security layer. These layers are conceptually distinct but
+This book begins with a simple question: what is an AI agent? The anatomy of an agentic
+AI system comprises four components: the intelligence layer, the action layer, the memory
+and knowledge layer, and the security layer. These layers are conceptually distinct but
 continuously interdependent in production: the model reasons over context assembled by
 the memory layer, selects actions exposed by the action layer, and operates within
 boundaries enforced by the security layer. Evaluation and observability sit across all
@@ -19,7 +19,7 @@ how these models work, beginning with the original Transformer architecture and
 progressing toward the design choices that characterise modern frontier models.
 
 The second layer is the \emph{action layer}. This layer enables the agent to produce
-effects beyond generating text. It encompasses function calling, APIs, tools, MCP
+effects beyond generating text. It encompasses function calling, tools, MCP
 servers and agent-as-tool patterns. Some tools are
 deterministic, such as a calculator, while others are
 stochastic, such as a sub-agent that performs research, writes code, or produces a
@@ -28,17 +28,14 @@ beyond generating text.
 
 The third layer is the \emph{memory and knowledge layer}. This layer determines what
 information is available to the model at the moment of decision. It includes short-term
-conversation state, long-term user and organisational memory, retrieval-augmented
-generation, knowledge bases, documents, vector stores and reusable
+conversation state, long-term user memory, retrieval-augmented
+generation, knowledge bases and reusable
 skills. In this book, skills are treated as a form of procedural knowledge: versioned,
 retrievable packages of instructions or patterns that improve the reliability with which
-the agent performs recurring tasks. The quality of this layer is as consequential as the
-capability of the model that draws on it: an agent operating from incomplete, stale, or
-poorly structured context will produce unreliable outputs regardless of the underlying
-model's capacity.
+the agent performs recurring tasks.
 
 The fourth layer is the \emph{security layer}. An agent with access to tools, persistent
-memory, and the ability to take consequential actions requires security as a foundational
+memory, and the ability to take actions requires security as a foundational
 architectural concern. The security layer includes identity, authentication,
 authorisation, permission boundaries, guardrails, human approval mechanisms, audit
 logging, sandboxing, and protection against prompt injection and data exfiltration. The

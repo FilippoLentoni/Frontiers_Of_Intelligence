@@ -1,9 +1,12 @@
 \chapter{The Memory and Knowledge Layer}
 
 The memory and knowledge layer determines what information is available to the model at
-the moment of decision. Its function is context engineering: given a task, the layer must
-construct the context window with the subset of available information that is most
-relevant, most current, and most likely to support a correct and grounded response.
+the moment of decision. Its function is to construct the context window with the subset
+of available information that is most relevant and most likely to support a correct and
+grounded response. Context engineering is the discipline of designing, assembling, and
+maintaining the information environment available to an agent at inference time, curating
+the optimal set of tokens during inference, including information beyond the prompt
+itself.
 
 \section{Why Memory and Knowledge Form a Single Layer}
 
