@@ -21,8 +21,6 @@ $\rightarrow$
 $\rightarrow$
 \textit{implementation}
 $\rightarrow$
-\textit{execution}
-$\rightarrow$
 \textit{feedback}
 $\rightarrow$
 \textit{new tasks or updated business problem/design}.
@@ -32,7 +30,7 @@ In an AI-first company, automation follows an \textit{AI gradient}. The center o
 
 At the beginning of the loop, humans identify the business problem, set the priority, and define the expected outcome. This is where human expertise is hardest to replace: identifying the right problem before it is fully specified, inferring what is unspoken, anticipating risks before they appear, and recognizing opportunities that are not yet obvious from the data.
 
-As work moves toward the center of the loop, AI can take on more of the implementation work. It can help convert a business requirement document into a high-level design, a high-level design into a low-level design, and a low-level design into executable tasks. Coding agents can then implement the required software changes through the software factory. In this context, the software factory is the set of skills, tools, tests, and CI/CD mechanisms that allow coding agents to generate software compliant with company requirements.
+As work moves toward the center of the loop, AI can take on more of the implementation work. It can help convert a business requirement document into a high-level design, a high-level design into a low-level design, and a low-level design into executable tasks. Coding agents\footnote{For implementation references on agent loops, see \href{https://code.claude.com/docs/en/agent-sdk/agent-loop}{Claude Agent SDK: Agent Loop} and \href{https://openai.com/index/unrolling-the-codex-agent-loop/}{OpenAI: Unrolling the Codex Agent Loop}.} can then implement the required software changes through the software factory. In this context, the software factory is the set of skills, tools, tests, and CI/CD mechanisms that allow coding agents to generate software compliant with company requirements.
 
 The system leverages feedback signals such as SME audits through sampling, customer feedback, and actuals data. These signals are converted into metrics that compare current performance against the ideal state. Based on the gap, the AI agent decides the next action. If the gap is small or localized, it creates a new task. If the gap suggests a deeper issue in the business logic or system design, it brings the problem back to the leadership and proposes updates to the business problem, BRD, HLD, or LLD.
 
