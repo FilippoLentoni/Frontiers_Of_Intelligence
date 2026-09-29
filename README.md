@@ -11,7 +11,8 @@ The book is organised around four layers:
 - the security and governance layer.
 
 It also includes applied chapters on building, deploying, evaluating, and operating
-agents in production.
+agents in production. A final mathematical chapter presents the Transformer through
+functional analysis and measure theory.
 
 ## How to Read the Project
 

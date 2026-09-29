@@ -1,0 +1,1958 @@
+% From Hilbert Spaces to Sigma-Algebras: The Transformer Explained at a Higher Level of Mathematical Abstraction
+% Included as the final chapter from main.tex; compiles with pdflatex.
+\chapter{\texorpdfstring{From Hilbert Spaces to \(\sigma\)-Algebras: The Transformer Explained at a Higher Level of Mathematical Abstraction}{From Hilbert Spaces to Sigma-Algebras: The Transformer Explained at a Higher Level of Mathematical Abstraction}}
+\chaptermark{From Hilbert Spaces to \(\sigma\)-Algebras}
+\label{ch:math-transformers}
+
+\section{Introduction}
+
+A transformer is the composition of two maps of different mathematical
+kinds. The first, from the input tokens to the last hidden state, is an
+operator between finite-dimensional Hilbert spaces: nonlinear as a
+whole, but assembled from linear maps, row-wise normalizations and
+softmax-weighted averages. The second, the output layer, is a Markov
+kernel from the last hidden state to the vocabulary: the softmax assigns
+to each hidden state a probability measure on the \(\sigma\)-algebra of token
+events, and the next token is a random variable with that law. This
+chapter develops both maps for the original Transformer of 2017.
+
+The chapter has three main sections.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Mathematical Tools} (Section~\ref{sec:math-tools}) collects the tools: Hilbert
+  and Banach spaces, linear and nonlinear operators, spectral theory,
+  weak derivatives and Sobolev spaces, measure-theoretic probability
+  built on the \(\sigma\)-algebra of events, the softmax as a Gibbs measure,
+  Fourier analysis, finite-precision arithmetic, information theory, and
+  approximation theory.
+\item
+  \textbf{The Original Transformer} (Section~\ref{sec:math-original}) describes the 2017
+  architecture as its authors presented it, with light notation.
+\item
+  \textbf{The Transformer as Operators and Measures}
+  (Section~\ref{sec:math-operators}) writes the 2017 model as a composition of operators, then shows
+  how its last layer defines a probability measure on the \(\sigma\)-algebra of
+  token events and how tokens are sampled from it.
+\end{itemize}
+
+The chapter concerns what a transformer is: a parametrized family of
+measures \(\{P_\theta\}\). How one member of the family is chosen, through
+pretraining, post-training, alignment and reinforcement learning, is a
+separate subject that this chapter does not treat.
+
+\textbf{The map from architecture to mathematics.} Each component of the
+model corresponds to one object of Section~\ref{sec:math-tools}. Table~\ref{tab:math-map} lists, for each
+component of the architecture, the mathematical object and the
+subsection that develops it. Every subsection of Section~\ref{sec:math-tools} appears on the right.
+
+\begin{longtable}{@{}p{0.30\linewidth}p{0.47\linewidth}p{0.15\linewidth}@{}}
+\caption{Each component of the 2017 Transformer, the mathematical object it corresponds to, and the subsection that develops it.}\label{tab:math-map}\\
+\toprule
+Component & Mathematical object & Developed in \\
+\midrule
+\endhead
+Hidden states \(X\in\mathbb{R}^{n\times d}\) & Finite-dimensional Hilbert space, Frobenius inner product & \S\ref{sec:math:I1} \\
+Layer stacking with \(\circ\) & Composition of operators, Lipschitz constants, chain rule & \S\ref{sec:math:I2} \\
+Token embedding & Linear map into the Hilbert space & \S\ref{sec:math:I1} \\
+Positional encoding & Orthogonal rotations, Fourier shift theorem & \S\ref{sec:math:I3}, \S\ref{sec:math:I8} \\
+Attention scores \(QK^{\top}\) & Bilinear form, SVD, rank \(\le d_k\), Eckart--Young & \S\ref{sec:math:I3} \\
+Attention softmax & Row-stochastic matrix, Markov kernel over positions & \S\ref{sec:math:I3}, \S\ref{sec:math:I6} \\
+Cross-attention over the memory & Integral operator with the exponential kernel, compact operators, Mercer (in projected coordinates) & \S\ref{sec:math:I4} \\
+Residual + LayerNorm & \(\mathrm{Id}+G\); projection theorem; compact set of states & \S\ref{sec:math:I1}, \S\ref{sec:math:I2} \\
+Feed-forward ReLU & Piecewise-linear map, weak derivative, \(W^{1,\infty}\) & \S\ref{sec:math:I5} \\
+Output logits & Linear functionals, Riesz representers & \S\ref{sec:math:I1} \\
+Output softmax & Probability measure on the \(\sigma\)-algebra \(2^{\mathcal{V}}\), Gibbs measure & \S\ref{sec:math:I6}, \S\ref{sec:math:I7} \\
+Temperature, top-\(k\), nucleus & Gibbs family, conditioning on an event & \S\ref{sec:math:I7} \\
+Sampling a token & Random variable with that law, Gumbel-max & \S\ref{sec:math:I6}, \S\ref{sec:math:I7} \\
+Causal mask & Predictability along a filtration, Doob--Dynkin & \S\ref{sec:math:I6} \\
+Autoregressive loop & Measure on sequences, Ionescu-Tulcea, \(\pi\)-\(\lambda\) uniqueness & \S\ref{sec:math:I6} \\
+End-of-sequence token & Stopping time, absorbing Markov chain & \S\ref{sec:math:I6} \\
+Training target, label smoothing & Conditional expectation as projection, cross-entropy and KL & \S\ref{sec:math:I6}, \S\ref{sec:math:I10} \\
+Floating-point evaluation & Finite precision, underflow of the measure & \S\ref{sec:math:I9} \\
+Expressivity of the architecture & Stone--Weierstrass, universality & \S\ref{sec:math:I11} \\
+\bottomrule
+\end{longtable}
+
+The same correspondence, read in the other direction, organizes Section~\ref{sec:math-operators}.
+
+\textbf{Notation.} Vectors are rows when they are rows of a matrix
+\(X \in \mathbb{R}^{n\times d}\), one row per token. In bilinear forms such as
+\(x^{\top} B\, y\), and in matrix--vector products such as \(Wh\), the vectors involved
+are read as columns.
+
+\section{Mathematical Tools}\label{sec:math-tools}
+
+This section builds every tool that Section~\ref{sec:math-operators} uses, in the order in which they
+depend on each other. Finite-dimensional linear algebra comes first,
+then its infinite-dimensional extensions, then measure-theoretic
+probability, then the analytic tools for positions, precision,
+information and approximation.
+
+\subsection{Vector spaces, inner products, and Hilbert
+spaces}\label{sec:math:I1}
+
+A real vector space \(V\) is a set closed under addition and scalar
+multiplication. An inner product \(\langle\cdot,\cdot\rangle\) on \(V\) equips it with geometry: it
+induces a norm \(\|x\| = \sqrt{\langle x,x\rangle}\), a distance \(\|x - y\|\), and a notion of
+orthogonality, \(\langle x,y\rangle = 0\). A Hilbert space is an inner-product space that
+is complete: every Cauchy sequence converges to a point of the space.
+
+Completeness is a nontrivial condition in infinite dimensions but holds
+automatically in finite dimensions. Every finite-dimensional
+inner-product space is a Hilbert space, isometrically isomorphic to
+\(\mathbb{R}^{d}\) with the Euclidean inner product. The space of
+matrices \(\mathbb{R}^{n\times d}\) with the Frobenius inner product is
+a Hilbert space of dimension \(nd\):
+
+\[
+\langle X, Y\rangle_F = \operatorname{tr}(X^\top Y) = \sum_{i,j} X_{ij} Y_{ij}.
+\]
+
+In finite dimensions all norms are equivalent: for any two norms there
+are constants \(c, C > 0\) with \(c\|x\|_a \le \|x\|_b \le C\|x\|_a\).
+Convergence and continuity therefore do not depend on the norm, although
+the constants can depend strongly on the dimension.
+
+\textbf{The projection theorem.} Let \(M\) be a closed subspace of a Hilbert
+space \(H\) (in finite dimensions every subspace is closed). Every \(x \in H\)
+decomposes uniquely as
+
+\[
+x = P_M x + (x - P_M x), \qquad P_M x \in M, \quad x - P_M x \perp M,
+\]
+
+and \(P_M x\) is the unique point of \(M\) closest to \(x\). The map \(P_M\) is
+linear, idempotent and self-adjoint. Least squares, and in \S\ref{sec:math:I6}
+conditional expectation, are instances of this theorem.
+
+\textbf{The Riesz representation theorem.} Every continuous linear
+functional \(f\) on a Hilbert space \(H\) has the form \(f(x) = \langle x, y_f\rangle\) for a
+unique \(y_f \in H\), and \(\|f\| = \|y_f\|\). In \(\mathbb{R}^{d}\) this says that
+every linear functional is \(x \mapsto u \cdot x\) for a unique vector \(u\), its
+representer. A vector can therefore be read in two ways: as a point of
+the space, or as the functional it represents.
+
+\subsection{Operators: linear, nonlinear, and
+piecewise}\label{sec:math:I2}
+
+An operator is a map \(T\colon V \to W\) between vector spaces. It is linear if
+\(T(\alpha x + \beta y) = \alpha T(x) + \beta T(y)\). Between finite-dimensional spaces, every
+linear operator is represented by a matrix once bases are fixed, and is
+bounded, with operator norm
+
+\[
+\|T\| = \sup_{\|x\| = 1} \|Tx\|,
+\]
+
+whose value depends on the norms chosen on \(V\) and \(W\).
+
+Nonlinear operators are studied through weaker structures.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Lipschitz continuity.} \(T\) is \(L\)-Lipschitz if \(\|T(x) - T(y)\| \le L\|x - y\|\)
+  for all \(x, y\). It is locally Lipschitz if such a bound holds on
+  every bounded set, with a constant that may grow with the set.
+\item
+  \textbf{Differentiability.} \(T\) is Fréchet differentiable at \(x\) if there
+  is a linear operator \(DT(x)\), the Jacobian in coordinates, such that
+  \(T(x + h) = T(x) + DT(x)h + o(\|h\|)\). Differentiation replaces a nonlinear
+  operator locally by a linear one.
+\end{itemize}
+
+Both properties compose well: Lipschitz constants multiply, \(L(T\circ S) \le
+L(T)\cdot L(S)\), and derivatives obey the chain rule, \(D(T\circ S)(x) = DT(S(x))\,
+DS(x)\). Backpropagation is the chain rule applied, in reverse order, to a
+long composition.
+
+\textbf{Piecewise-smooth maps.} A map \(T\colon \mathbb{R}^{m} \to
+\mathbb{R}^{p}\) is piecewise smooth if there are finitely many
+disjoint open sets \(\Omega_1, \ldots, \Omega_r\) whose closures cover
+\(\mathbb{R}^{m}\), \(T\) is smooth on each \(\Omega_j\), and the boundary set \(\Gamma\) has
+Lebesgue measure zero. Such a map is differentiable almost everywhere.
+It need not be continuous across \(\Gamma\), and when continuous it need not be
+Lipschitz.
+
+Two examples delimit the class. The ReLU function \(x \mapsto \max(0, x)\) is
+piecewise linear, continuous and 1-Lipschitz. The top-\(k\) selection
+operator, which returns the index set \(S_k(s)\) of the \(k\) largest entries
+of a score vector \(s \in \mathbb{R}^{N}\), is piecewise constant and
+jumps where two scores tie. A map of the form
+
+\[
+F(x) = \sum_{i \in S_k(s(x))} g_i(x)
+\]
+
+is smooth away from the tie set \(\{x : s_i(x) = s_j(x) \text{ for some } i \neq j\}\)
+and generally discontinuous on it. The tie set has measure zero whenever
+the score differences \(s_i - s_j\) are non-constant real-analytic
+functions, because the zero set of a non-constant real-analytic function
+has Lebesgue measure zero. This is the real-variable counterpart of the
+identity theorem for holomorphic functions, and it applies to networks
+built from analytic activations such as exp and GELU.
+
+Rademacher's theorem states that every locally Lipschitz map is
+differentiable almost everywhere. It covers ReLU networks but not
+networks containing hard selections.
+
+\textbf{Absolute continuity and the fundamental theorem of calculus.}
+Almost-everywhere differentiability does not recover a function from its
+derivative. On an interval, the identity \(f(b) - f(a) = \int_a^b f'\)
+holds exactly when \(f\) is absolutely continuous, and every Lipschitz
+function is absolutely continuous. The Cantor--Vitali function is the
+standard counterexample: it is continuous and non-decreasing from 0 to
+1, yet \(f' = 0\) almost everywhere. Its almost-everywhere derivative
+carries no information about how the function changes. Step functions
+fail more severely: they are discontinuous, and their derivative is zero
+wherever it exists. For quantizers and hard selection, gradients computed almost
+everywhere are therefore uninformative, and training requires surrogate
+gradients.
+
+\subsection{Spectral theory in finite
+dimensions}\label{sec:math:I3}
+
+\textbf{The spectral theorem.} A linear operator \(A\) on a real
+inner-product space is self-adjoint if \(\langle Ax, y\rangle = \langle x, Ay\rangle\). Every
+self-adjoint operator on a finite-dimensional space has an orthonormal
+basis of eigenvectors with real eigenvalues:
+
+\[
+A = Q \Lambda Q^\top, \qquad Q^\top Q = I, \quad \Lambda = \operatorname{diag}(\lambda_1, \dots, \lambda_d).
+\]
+
+The theorem requires linearity and symmetry and says nothing about
+nonlinear maps.
+
+\textbf{Orthogonal operators.} A matrix \(Q\) with \(Q^{\top}Q = I\) is an
+isometry, \(\|Qx\| = \|x\|\), and all its singular values equal 1. A
+block-diagonal matrix of \(2 \times 2\) rotations \(R_\theta\) is the basic example.
+Rotations satisfy \(R_\alpha R_\beta = R_{\alpha+\beta}\): composing them adds angles, so
+they represent translation linearly. Identifying \(\mathbb{R}^{2}\) with
+\(\mathbb{C}\), \(R_\theta\) is multiplication by \(e^{i\theta}\) (\S\ref{sec:math:I8}).
+
+\textbf{The singular value decomposition.} Any \(W \in
+\mathbb{R}^{m\times n}\) of rank \(r\) factors as
+
+\[
+W = U \Sigma V^\top = \sum_{i=1}^{r} \sigma_i\, u_i v_i^\top, \qquad \sigma_1 \ge \cdots \ge \sigma_r > 0,
+\]
+
+with orthonormal singular vectors. The SVD can be derived from the
+spectral theorem applied to \(W^{\top}W\), whose nonzero eigenvalues are
+the \(\sigma_i^{2}\). The largest singular value is the Euclidean operator
+norm, \(\|W\|_{2} = \sigma_{1}\), and hence the Euclidean Lipschitz
+constant of \(x \mapsto Wx\).
+
+\textbf{Low-rank approximation.} By the Eckart--Young--Mirsky theorem,
+truncating the SVD after \(k\) terms gives the best rank-\(k\) approximation in
+both the spectral and Frobenius norms:
+
+\[
+\|W - W_k\|_2 = \sigma_{k+1}, \qquad \|W - W_k\|_F = \Big(\sum_{i > k} \sigma_i^2\Big)^{1/2}.
+\]
+
+Any product \(W = BA\) with \(B \in \mathbb{R}^{m\times k}\) and \(A \in
+\mathbb{R}^{k\times n}\) has rank at most \(k\), so factoring through a
+\(k\)-dimensional space imposes a rank bound by construction.
+
+\textbf{The polar decomposition.} For \(W \in \mathbb{R}^{m\times n}\)
+with \(m \ge n\), the thin SVD gives
+
+\[
+W = (U V^\top)\,(V \Sigma V^\top),
+\]
+
+the product of a matrix with orthonormal columns and a positive
+semidefinite matrix. The polar factor \(UV^{\top}\) is the nearest
+matrix with orthonormal columns in the Frobenius norm: it keeps the
+directions of \(W\) and sets every singular value to 1. Newton--Schulz
+iterations compute it using matrix products only.
+
+\textbf{Stochastic matrices.} \(P \in \mathbb{R}^{n\times m}\) is
+row-stochastic if \(P \ge 0\) entrywise and every row sums to 1. For any \(V \in
+\mathbb{R}^{m\times d}\), each row of \(PV\) is a convex combination of
+rows of \(V\), and Hölder's inequality with exponents \(1\) and \(\infty\) gives, for
+every column \(j\),
+
+\[
+|(PV)_{ij}| \le \sum_k P_{ik}\,|V_{kj}| \le \max_k |V_{kj}|.
+\]
+
+A row-stochastic matrix is therefore non-expansive in the maximum norm,
+\(\|P\|_{\infty\to\infty} = 1\). It need not be non-expansive in the Euclidean norm: the
+\(n \times n\) matrix whose rows all equal \(e_{1}^{\top}\) has \(\|P\|_{2} = \sqrt{n}\).
+
+\textbf{Doubly stochastic matrices.} A square matrix \(B\) is doubly
+stochastic if both \(B\) and \(B^{\top}\) are row-stochastic. By the
+Birkhoff--von Neumann theorem, the doubly stochastic matrices form the
+convex hull of the permutation matrices (the Birkhoff polytope). Two
+consequences follow:
+
+\begin{itemize}
+\tightlist
+\item
+  every doubly stochastic matrix satisfies \(\|B\|_{2} \le 1\), since each
+  permutation matrix has norm 1 and the norm is convex;
+\item
+  the polytope is closed under multiplication, so products of
+  arbitrarily many doubly stochastic matrices remain non-expansive.
+\end{itemize}
+
+By the Sinkhorn--Knopp theorem, for every matrix \(A\) with strictly
+positive entries there are positive diagonal matrices \(D_{1}\),
+\(D_{2}\), unique up to a scalar, such that \(D_{1}AD_{2}\) is
+doubly stochastic. Alternating row and column normalization converges to
+it; stopping after finitely many steps gives an approximately doubly
+stochastic matrix.
+
+\subsection{Banach spaces, compact operators, and the spectral
+theorem}\label{sec:math:I4}
+
+Two later topics need infinite dimensions. Approximation theory (\S\ref{sec:math:I11})
+works in spaces of functions that are generally not Hilbert spaces, and
+the kernel view of attention (Section~\ref{sec:math-operators}) describes attention as an
+integral operator, whose structure is governed by the spectral theory of
+compact operators.
+
+\textbf{Banach spaces.} A normed space is a Banach space if it is
+complete. Every Hilbert space is Banach; a norm comes from an inner
+product exactly when it satisfies the parallelogram law
+\(\|x + y\|^{2} + \|x - y\|^{2} = 2\|x\|^{2} + 2\|y\|^{2}\). Two examples recur:
+
+\begin{itemize}
+\tightlist
+\item
+  \(C(K)\), the continuous functions on a compact \(K \subset \mathbb{R}^{d}\)
+  with the sup norm \(\|f\|_\infty = \max_{K} |f|\): Banach but
+  not Hilbert, and the natural setting for uniform approximation;
+\item
+  \(L^p(\mu)\) for \(1 \le p \le \infty\), with
+  \(\|f\|_p = \bigl(\int |f|^p \, d\mu\bigr)^{1/p}\): Hilbert only for \(p = 2\).
+  Hölder's inequality \(\|fg\|_{1} \le \|f\|_p\|g\|_q\) (\(1/p + 1/q = 1\))
+  and Minkowski's inequality \(\|f + g\|_p \le \|f\|_p + \|g\|_p\) are its basic tools.
+\end{itemize}
+
+Two finite-dimensional facts fail in infinite dimensions.
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Norms are no longer equivalent.} On \(C([0,1])\) there are
+  sequences \((f_n)\) with \(\|f_n\|_{1}\) constant and \(\|f_n\|_\infty \to \infty\). A claim
+  such as ``networks approximate \(f\) to accuracy \(\varepsilon\)'' is incomplete until
+  the norm is named.
+\item
+  \textbf{Bounded sets need not have compact closure.} By Riesz's lemma,
+  the closed unit ball is compact if and only if the space is
+  finite-dimensional. Compactness, automatic in \(\mathbb{R}^{d}\) by
+  Heine--Borel, becomes a special property.
+\end{enumerate}
+
+\textbf{Bounded and compact operators.} A linear operator \(T\colon X \to Y\) is
+bounded if \(\|T\| = \sup_{\|x\| \le 1} \|Tx\|\) is finite, which is equivalent
+to continuity; when \(Y\) is Banach, the bounded operators \(B(X, Y)\) form a
+Banach space. \(T\) is compact if it maps bounded sets to sets with compact
+closure. Finite-rank operators are compact, and on Hilbert spaces the
+compact operators are exactly the operator-norm limits of finite-rank
+operators.
+
+The main example is the integral operator. For a finite Borel measure \(\mu\)
+on a compact \(K\) and a kernel \(\kappa \in L^{2}(\mu \otimes \mu)\),
+
+\[
+(T_\kappa f)(u) = \int_K \kappa(u, v)\, f(v)\, d\mu(v)
+\]
+
+is a Hilbert--Schmidt, hence compact, operator on \(L^{2}(\mu)\). Every
+continuous kernel on a compact set defines one.
+
+\textbf{The spectral theorem for compact self-adjoint operators.} Let \(T\)
+be compact and self-adjoint on a separable Hilbert space \(H\). There are an
+orthonormal sequence \((e_i)\) and real eigenvalues \(\lambda_i\) with
+\(|\lambda_{1}| \ge |\lambda_{2}| \ge \cdots\) and \(\lambda_i
+\to 0\) such that
+
+\[
+Tf = \sum_i \lambda_i\, \langle f, e_i \rangle\, e_i \qquad \text{for all } f \in H,
+\]
+
+and each nonzero eigenvalue has a finite-dimensional eigenspace. This is
+the infinite-dimensional analogue of \(A = Q\Lambda Q^{\top}\), with the
+additional constraint that the eigenvalues can accumulate only at zero.
+For compact operators that are not self-adjoint, the Schmidt
+decomposition \(Tf = \sum s_i \langle f, v_i\rangle u_i\) plays the role of the SVD, with
+singular values \(s_i\) decreasing to zero. Eckart--Young carries over:
+truncating after \(k\) terms is optimal, with error \(s_{k+1}\) in operator
+norm. The decay of the singular values measures how compressible the
+operator is.
+
+\textbf{Mercer's theorem.} A symmetric kernel \(\kappa\) is positive definite if
+every matrix \([\kappa(u_i, u_j)]\) built from finitely many points is
+positive semidefinite. Let \(K\) be compact, \(\mu\) a finite Borel measure with
+support \(K\), and \(\kappa\) continuous, symmetric and positive definite. Then \(T_\kappa\)
+is compact, self-adjoint and positive, and
+
+\[
+\kappa(u, v) = \sum_i \lambda_i\, \phi_i(u)\, \phi_i(v), \qquad \lambda_i \ge 0,
+\]
+
+with absolute and uniform convergence on \(K \times K\). The kernel is an inner
+product of feature vectors \(\Phi(u) = (\sqrt{\lambda_i}\, \phi_i(u))_i\) in \(\ell^{2}\),
+and these features span its reproducing kernel Hilbert space (RKHS).
+
+The exponential kernel \(\kappa(q, k) = e^{\langle q,k\rangle}\) is positive definite: its
+Taylor series is a sum, with nonnegative coefficients, of powers of the
+linear kernel, and powers of a positive-definite kernel remain positive
+definite by the Schur product theorem. On a compact set Mercer's theorem
+applies to it. Because the kernel is analytic, its eigenvalues decay
+rapidly; the decay slows as the domain grows, because the kernel then
+varies over a wider range of scales. The precise rate depends on the dimension and the domain
+radius; see Steinwart and Christmann for quantitative statements.
+
+\subsection{Weak derivatives and Sobolev
+spaces}\label{sec:math:I5}
+
+The states of a transformer are vectors in finite-dimensional spaces, so
+Sobolev spaces do not describe the state space. They are the right
+language for two other questions: how regular the network map itself is,
+and how regular a target function must be for networks to approximate it
+at a given rate (\S\ref{sec:math:I11}).
+
+\textbf{Weak derivatives and distributions.} Let \(\Omega \subset \mathbb{R}^{m}\)
+be open and \(f\) locally integrable. A locally integrable \(g\) is the weak
+partial derivative \(\partial_i f\) if
+
+\[
+\int_\Omega f\, \partial_i \varphi \, dx = -\int_\Omega g\, \varphi \, dx \qquad \text{for all } \varphi \in C_c^\infty(\Omega).
+\]
+
+More generally, a distribution is a continuous linear functional \(T\) on
+the test functions \(C_c^\infty(\Omega)\), and its derivative is defined by
+\(\langle \partial_i T, \varphi\rangle = -\langle T, \partial_i \varphi\rangle\). Every locally integrable function defines a
+regular distribution \(\varphi \mapsto \int f\varphi\), and every distribution has derivatives of
+all orders.
+
+The model example is ReLU. Its weak derivative is the Heaviside step \(H =
+\mathbf{1}_{(0,\infty)}\), and its second distributional derivative is the Dirac delta
+\(\delta_{0}\), the functional \(\varphi \mapsto \varphi(0)\). A network built from ReLU and linear
+maps is piecewise linear, so its classical Hessian is zero almost
+everywhere; its curvature is concentrated, as a measure, on the
+piecewise-linear hypersurfaces (hyperplanes for a single layer, bent
+hyperplanes for deeper networks) where some unit switches.
+
+\textbf{Sobolev spaces.} For \(k \in \mathbb{N}\) and \(1 \le p \le \infty\),
+
+\[
+W^{k,p}(\Omega) = \{ f \in L^p(\Omega) : \partial^\alpha f \in L^p(\Omega) \ \text{for all } |\alpha| \le k \},
+\]
+
+with weak derivatives, is a Banach space; \(H^k = W^{k,2}\) is a
+Hilbert space. Two facts connect this to \S\ref{sec:math:I2}.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Lipschitz functions are \(W^{1,\infty}\).} On \(\mathbb{R}^{m}\), a
+  function is locally Lipschitz exactly when it belongs to
+  \(W^{1,\infty}_{\mathrm{loc}}\), and its weak gradient coincides with the classical
+  gradient that Rademacher's theorem provides almost everywhere. Dense
+  attention, smooth activations, ReLU and normalization (smooth everywhere for \(\epsilon > 0\)) all produce network maps in this class.
+\item
+  \textbf{Jumps leave the Sobolev scale.} A function that jumps across a
+  hypersurface is not in \(W^{1,1}_{\mathrm{loc}}\). It is locally of bounded
+  variation: its distributional derivative is a measure with an
+  absolutely continuous part (the almost-everywhere gradient) and a
+  singular jump part concentrated on the hypersurface. Hard top-\(k\)
+  selection, discrete routing and quantizers produce maps of this kind.
+  The almost-everywhere gradient sees only the first part and misses the
+  jumps entirely, which is the precise form of the warning at the end of
+  \S\ref{sec:math:I2}.
+\end{itemize}
+
+\subsection{\texorpdfstring{Measure, probability, and the \(\sigma\)-algebra of
+events}{Measure, probability, and the sigma-algebra of events}}\label{sec:math:I6}
+
+This section builds the probabilistic language of the chapter. Its
+central object is the \(\sigma\)-algebra: the collection of events to which
+probabilities can be consistently assigned.
+
+\textbf{\(\sigma\)-algebras and events.} A \(\sigma\)-algebra \(\mathcal{F}\) on a set \(\Omega\) is a collection
+of subsets that contains \(\Omega\) and is closed under complements and countable
+unions. The pair \((\Omega, \mathcal{F})\) is a measurable space, and its elements are
+events. The axioms guarantee that ``not'', ``or'' and ``and'', applied
+to countably many events, again yield events. For any collection \(\mathcal{C}\) of
+subsets, \(\sigma(\mathcal{C})\) denotes the smallest \(\sigma\)-algebra containing \(\mathcal{C}\), the \(\sigma\)-algebra
+it generates.
+
+\textbf{The token \(\sigma\)-algebra.} When \(\Omega\) is finite or countable, the power
+set \(2^{\Omega}\) is the natural \(\sigma\)-algebra. For a finite vocabulary \(\mathcal{V}\), the
+space \((\mathcal{V}, 2^{\mathcal{V}})\) has \(2^{|\mathcal{V}|}\) events; its atoms are
+the singletons \(\{v\}\), and every event is a finite union of atoms. Events
+have direct linguistic readings: ``the next token is punctuation'',
+``the next token begins a word'', ``the next token lies in a given top-\(k\)
+set''.
+
+\textbf{Borel \(\sigma\)-algebras.} On \(\mathbb{R}^{d}\) the power set is not a
+usable \(\sigma\)-algebra, since Lebesgue measure cannot be extended to all
+subsets. The standard choice is the Borel \(\sigma\)-algebra
+\(\mathcal{B}(\mathbb{R}^{d})\), generated by the open sets. Continuous and
+piecewise-smooth functions are Borel measurable. Hidden states, and
+continuous inputs such as image embeddings, live in measurable spaces of
+this kind.
+
+\textbf{Measures, conditioning, and construction.} A probability measure
+\(P\) on \((\Omega, \mathcal{F})\) is countably additive with \(P(\Omega) = 1\). On a countable space it
+is determined by its values on atoms, \(P(S) = \sum_{\omega \in S} p(\omega)\). For
+an event \(S\) with \(P(S) > 0\), conditioning gives the measure
+\(P(A \mid S) = P(A \cap S)/P(S)\), supported on \(S\). A sub-probability
+measure satisfies \(P(\Omega) \le 1\); adjoining a cemetery point \(\partial\) that carries
+the missing mass turns it into a probability measure.
+
+Measures on large \(\sigma\)-algebras are built from their values on simple
+generating classes. Carathéodory's construction extends a countably
+additive set function from an algebra to the \(\sigma\)-algebra it generates.
+Uniqueness comes from Dynkin's \(\pi\)-\(\lambda\) theorem: a \(\pi\)-system is a class closed
+under finite intersections, and two probability measures that agree on a
+\(\pi\)-system agree on the \(\sigma\)-algebra it generates.
+
+\textbf{Random variables, information, and Doob--Dynkin.} A map \(X\colon (\Omega,
+\mathcal{F}) \to (E, \mathcal{E})\) is measurable if \(X^{-1}(B) \in \mathcal{F}\) for every \(B \in \mathcal{E}\); on a
+probability space it is a random variable. Its law \(P^X(B) = P(X \in B)\)
+is the pushforward of \(P\). Each random variable generates \(\sigma(X) =
+\{X^{-1}(B) : B \in \mathcal{E}\}\), the events decided by the value of \(X\): its
+information. The Doob--Dynkin lemma makes this precise. If \(Y\) takes
+values in \(\mathbb{R}^{d}\) or a finite set, then \(Y\) is \(\sigma(X)\)-measurable
+if and only if \(Y = f(X)\) for some measurable \(f\).~``\(Y\) depends only on \(X\)''
+and ``\(Y\) is measurable with respect to the information in \(X\)'' are the
+same statement.
+
+\textbf{Densities and Radon--Nikodym.} A measure \(\nu\) is absolutely
+continuous with respect to \(\mu\), written \(\nu \ll \mu\), if \(\mu(A) = 0\) implies \(\nu(A) =
+0\). For \(\sigma\)-finite measures, the Radon--Nikodym theorem gives a density
+\(d\nu/d\mu \ge 0\) with \(\nu(A) = \int_A (d\nu/d\mu)\, d\mu\) for every \(A\). On a finite space the
+density is simply the ratio of masses, \(\nu(\{v\})/\mu(\{v\})\). Likelihood
+ratios and the Kullback--Leibler divergence (\S\ref{sec:math:I10}) are defined through
+Radon--Nikodym derivatives.
+
+\textbf{Conditional expectation as a projection.} Let \(\mathcal{G} \subset \mathcal{F}\) be a
+sub-\(\sigma\)-algebra. For \(X \in L^{1}(P)\), the conditional expectation \(\mathbb{E}[X
+\mid \mathcal{G}]\) is the almost surely unique \(\mathcal{G}\)-measurable random variable
+with
+
+\[
+\int_A \mathbb{E}[X \mid \mathcal{G}]\, dP = \int_A X \, dP \qquad \text{for all } A \in \mathcal{G}.
+\]
+
+For \(X \in L^{2}\), the \(\mathcal{G}\)-measurable square-integrable variables form a
+closed subspace \(L^{2}(\Omega, \mathcal{G}, P)\) of the Hilbert space \(L^{2}(\Omega, \mathcal{F},
+P)\), and \(\mathbb{E}[X \mid \mathcal{G}]\) is exactly the orthogonal projection of \(X\)
+onto it (\S\ref{sec:math:I1}). It is therefore the best predictor of \(X\) in mean square
+among all functions of the information in \(\mathcal{G}\). Conditional probabilities
+are the case \(X = 1_A\): \(P(A \mid \mathcal{G}) = \mathbb{E}[1_A \mid \mathcal{G}]\).
+
+\textbf{Kernels.} A Markov kernel from \((E, \mathcal{E})\) to \((\Omega, \mathcal{F})\) assigns to each
+\(e \in E\) a probability measure \(K(e, \cdot)\) on \(\mathcal{F}\), measurably in \(e\). It is a
+measure that varies with an input, the formal object behind every
+conditional distribution in this chapter. A row-stochastic matrix is
+exactly a Markov kernel between finite sets; if \(K(e, \Omega) \le 1\) is allowed,
+the kernel is sub-Markov.
+
+\textbf{Sequence space, cylinder sets, and filtrations.} Let \(\Omega =
+\mathcal{V}^{\mathbb{N}}\) be the space of infinite sequences over a finite
+alphabet, with product \(\sigma\)-algebra. The cylinder sets
+
+\[
+C(x_1, \dots, x_t) = \{ \omega \in \Omega : \omega_1 = x_1, \dots, \omega_t = x_t \}
+\]
+
+fix a prefix. For each \(t\), \(\mathcal{F}_{t} = \sigma(\omega_{1}, \ldots, \omega_{t})\) is
+generated by the cylinders of length \(t\) and contains every event decided
+by the first \(t\) symbols. The \(\sigma\)-algebras are nested, \(\mathcal{F}_{0} = \{\emptyset, \Omega\}
+\subset \mathcal{F}_{1} \subset \mathcal{F}_{2} \subset \cdots\), and form a filtration; \(\mathcal{F}_\infty = \sigma(\bigcup_{t}
+\mathcal{F}_{t})\) is the product \(\sigma\)-algebra. The cylinders together with \(\emptyset\) form
+a \(\pi\)-system generating \(\mathcal{F}_\infty\), so by the \(\pi\)-\(\lambda\) theorem a probability measure
+on sequence space is uniquely determined by the probabilities of all
+prefixes.
+
+\textbf{Adaptedness, predictability, and stopping times.} A process
+\((Y_t)\) is adapted if each \(Y_t\) is \(\mathcal{F}_t\)-measurable, and predictable if
+each \(Y_t\) is \(\mathcal{F}_{t-1}\)-measurable: determined strictly by the past. By
+Doob--Dynkin, predictability means \(Y_t = f_t(\omega_{1}, \ldots,
+\omega_{t-1})\). A stopping time is a random time \(\tau\) with \(\{\tau = t\} \in \mathcal{F}_t\) for
+every \(t\): whether to stop is decidable from the information available at
+that time.
+
+\textbf{Construction of sequence measures.} The Ionescu-Tulcea theorem
+states that a sequence of Markov kernels \(p(\cdot \mid
+x_{<t})\) from the past to the next symbol determines a unique
+probability measure on \((\Omega, \mathcal{F}_\infty)\). On cylinders it satisfies the chain
+rule:
+
+\[
+P\big(C(x_1, \dots, x_t)\big) = \prod_{s=1}^{t} p(x_s \mid x_{<s}).
+\]
+
+When generation starts from a prompt, the construction applies
+conditionally on it.
+
+\textbf{Markov chains and absorption.} Such a process is a
+time-homogeneous Markov chain on the countable space of finite
+prefixes (a prefix records its own length, so no separate time index is
+needed): each step appends one symbol according to a kernel that
+depends on the current prefix. A state is absorbing if the chain, once
+there, never leaves. Absorption problems ask for the probability that
+the chain is eventually absorbed; Section~\ref{sec:math-operators} identifies this probability
+with termination of generation.
+
+\subsection{The softmax and Gibbs
+measures}\label{sec:math:I7}
+
+For \(z \in \mathbb{R}^{K}\) and a temperature \(\tau > 0\), the
+softmax
+
+\[
+\operatorname{softmax}_\tau(z)_k = \frac{e^{z_k/\tau}}{\sum_j e^{z_j/\tau}}
+\]
+
+maps any real vector to a strictly positive probability vector, and
+hence to a probability measure on \((\{1, \ldots, K\},
+2^{\{1,\ldots,K\}})\) that charges every atom.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Shift invariance.} \(\operatorname{softmax}_\tau(z + c\mathbf{1}) =
+  \operatorname{softmax}_\tau(z)\) for every constant \(c\).~Only logit differences matter; the
+  logits live naturally in the quotient
+  \(\mathbb{R}^{K}/\mathbb{R}\mathbf{1}\).
+\item
+  \textbf{Gradient and curvature.} The softmax is the gradient of the
+  convex function \(\tau \log \sum_j e^{z_j/\tau}\). At \(\tau = 1\) its Jacobian, which
+  is also the Hessian of log-sum-exp, is \(\operatorname{diag}(p) - pp^{\top}\). This
+  is the covariance matrix of the one-hot vector drawn from \(p\), and the
+  Fisher information of the categorical family in its natural
+  parameters. It is symmetric positive semidefinite with \(\mathbf{1}\)
+  in its null space, and \(\operatorname{softmax}_\tau\) is \((1/\tau)\)-Lipschitz in the Euclidean
+  norm.
+\item
+  \textbf{Variational characterization.} The softmax is the Gibbs
+  distribution:
+\end{itemize}
+
+\[
+\operatorname{softmax}_\tau(z) = \arg\max_{p \in \Delta^{K-1}} \big\{ \langle p, z \rangle + \tau H(p) \big\}, \qquad H(p) = -\sum_k p_k \log p_k.
+\]
+
+This is convex duality: the Fenchel conjugate of log-sum-exp is negative
+entropy on the simplex and \(+\infty\) off it. Temperature weights entropy
+against expected score. As \(\tau \to 0\) the measure converges weakly to the
+uniform measure on the argmax set, a Dirac mass when the maximizer is
+unique; as \(\tau \to \infty\) it tends to the uniform measure.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Masking and restriction.} Logits set to \(-\infty\) receive probability
+  zero. Applying the softmax only to the logits indexed by a set \(S\)
+  produces exactly the conditional measure \(P(\cdot \mid S)\) of \S\ref{sec:math:I6}:
+  restricting the softmax to a subset is conditioning on that event.
+\item
+  \textbf{Extra denominator mass.} Adding \(b > 0\) to the
+  denominator yields a sub-probability vector, equivalently a
+  probability vector on \(\{1, \ldots, K\} \cup \{\partial\}\) with mass \(b/(b + \sum_j
+  e^{z_j})\) on the cemetery point.
+\item
+  \textbf{Sampling as a measurable map of noise.} If \(G_{1}, \ldots,
+  G_K\) are independent standard Gumbel variables, then \(\arg\max_k (z_k +
+  G_k)\) has law \(\operatorname{softmax}_{1}(z)\) (the Gumbel-max trick).
+\item
+  \textbf{Stable computation.} Shift invariance justifies computing the
+  softmax after subtracting \(\max_k z_k\), which prevents overflow.
+  Partial results over blocks combine associatively: a block summarized
+  by \((m, s)\), with \(m\) its maximum logit and \(s\) the sum of \(e^{z_k - m}\),
+  merges with another as \(m = \max(m_{1}, m_{2})\), \(s =
+  s_{1}e^{m_{1}-m} + s_{2}e^{m_{2}-m}\). This online
+  softmax lets attention be computed block by block without storing the
+  full score matrix.
+\end{itemize}
+
+\subsection{Fourier analysis and positional
+structure}\label{sec:math:I8}
+
+\textbf{Complex exponentials and rotations.} Identify \(\mathbb{R}^{2}\)
+with \(\mathbb{C}\). The rotation \(R_\theta\) becomes multiplication by
+\(e^{i\theta}\), and the map \(m \mapsto e^{im\theta}\) turns translation of an integer
+position \(m\) into multiplication: \(e^{i(m+k)\theta} =
+e^{ik\theta}e^{im\theta}\). This identity underlies both Fourier
+analysis and positional encodings.
+
+\textbf{Fourier series.} The functions \(e_k(x) = e^{ikx}/\sqrt{2\pi}\), \(k \in
+\mathbb{Z}\), form an orthonormal basis of \(L^{2}(-\pi, \pi)\). Every \(f \in
+L^{2}\) expands as \(f = \sum \langle f, e_k\rangle e_k\), and Parseval's identity
+\(\|f\|^{2} = \sum |\langle f, e_k\rangle|^{2}\) says the coefficient
+map is an isometry onto \(\ell^{2}\).
+
+\textbf{The Fourier transform.} For \(f \in L^{1}(\mathbb{R}^{d})\),
+\(\hat{f}(\xi) = \int f(x)e^{-ix\cdot\xi}\, dx\). It satisfies the Riemann--Lebesgue lemma,
+inversion for suitable \(f\), and, by Plancherel's theorem, extends to a
+multiple of a unitary operator on \(L^{2}\). Two properties are used
+below:
+
+\[
+\widehat{f(\cdot - a)}(\xi) = e^{-i a \cdot \xi}\, \hat f(\xi), \qquad \widehat{f * g} = \hat f\, \hat g.
+\]
+
+The shift theorem says translation acts on frequencies as a phase
+rotation. The convolution theorem says every bounded translation-invariant
+linear operator on \(L^2\), which is a convolution (in general with a
+distribution), is diagonalized by the Fourier transform.
+
+\textbf{Phases and their ambiguity.} The argument of a complex number is
+defined only modulo \(2\pi\); the complex logarithm is multivalued, and a
+branch must be chosen. For positional structure this means that the
+phase \(m\theta\) determines the position \(m\) only modulo \(2\pi/\theta\). A single frequency
+cannot distinguish positions that differ by a full period (aliasing).
+Several frequencies in geometric progression resolve positions over a
+range set by the longest period. Incommensurate frequencies never alias
+exactly on the integers, but beyond that range distinct positions become
+numerically hard to tell apart.
+
+\subsection{Finite-precision
+arithmetic}\label{sec:math:I9}
+
+Digital hardware does not compute in \(\mathbb{R}\). A floating-point
+format defines a finite set \(\mathbb{F} \subset \mathbb{R} \cup \{\pm\infty\}\),
+and rounding is a map \(\mathrm{fl}\colon \mathbb{R} \to \mathbb{F}\) sending each
+real number to a nearby element. Within the normal range \(|\mathrm{fl}(x)
+- x| \le u|x|\), where the unit roundoff \(u\) is set by
+the number of mantissa bits.
+
+Low-precision formats combine a small grid with a shared scale: a block
+of \(b\) values is stored as \(x_{i} \approx s \cdot q_{i}\), each \(q_{i}\) from
+the grid and one scale \(s\) per block. The 4-bit E2M1 format has magnitudes
+\(\{0, 0.5, 1, 1.5, 2, 3, 4, 6\}\) and a sign bit, so the largest value in a
+block is \(6 \cdot s_{\max}\), where \(s_{\max}\) is the largest representable scale.
+
+A quantizer \(Q = \mathrm{fl}\) has three properties:
+
+\begin{itemize}
+\tightlist
+\item
+  it is idempotent, \(Q \circ Q = Q\);
+\item
+  it is piecewise constant on each coordinate, hence nonlinear and
+  locally of bounded variation;
+\item
+  its derivative vanishes except on the finite set of rounding
+  thresholds, where it jumps.
+\end{itemize}
+
+By \S\ref{sec:math:I2} and \S\ref{sec:math:I5}, its almost-everywhere derivative carries no
+information, so training through a quantizer needs a surrogate gradient,
+commonly the straight-through estimator, which treats \(DQ\) as the
+identity.
+
+Norm bounds determine whether a format can overflow. If normalization
+bounds the Euclidean norm of a state by \(R\), every coordinate is bounded
+by \(R\), and orthogonal maps such as rotations preserve that bound. A
+format whose largest magnitude exceeds \(R\) cannot overflow on those
+states. The normalized states lie on a compact set, so continuous maps
+of them are bounded (Weierstrass) and uniformly continuous
+(Heine--Cantor).
+
+The same remarks apply to probabilities. The exact softmax is strictly
+positive, but in floating point small probabilities can underflow to
+zero: the computed measure can assign zero mass to atoms that the
+idealized measure charges.
+
+\subsection{Information theory}\label{sec:math:I10}
+
+Let \(p\) and \(q\) be probability vectors on a finite set. The entropy,
+cross-entropy and Kullback--Leibler divergence are
+
+\[
+H(p) = -\sum_k p_k \log p_k, \qquad H(p, q) = -\sum_k p_k \log q_k, \qquad \mathrm{KL}(p \,\|\, q) = \sum_k p_k \log \frac{p_k}{q_k}.
+\]
+
+They satisfy \(H(p, q) = H(p) + \mathrm{KL}(p \,\|\, q)\). The divergence is the expected
+log Radon--Nikodym derivative, \(\mathrm{KL}(P \,\|\, Q) = \mathbb{E}_P[\log dP/dQ]\), defined
+when \(P \ll Q\) and \(+\infty\) otherwise. By Gibbs' inequality \(\mathrm{KL}(p \,\|\, q) \ge 0\), with
+equality exactly when \(p = q\); minimizing cross-entropy in \(q\) therefore
+recovers \(p\).~KL is not symmetric: when \(q\) ranges over a restricted family (for
+example unimodal \(q\) and multimodal \(p\)), minimizing \(\mathrm{KL}(p \,\|\, q)\) over \(q\) spreads \(q\)
+over all of \(p\)'s mass, while minimizing \(\mathrm{KL}(q \,\|\, p)\) concentrates \(q\) on a mode
+of \(p\).
+
+For measures on sequence space built by the chain rule, divergences
+decompose along the filtration:
+
+\[
+\mathrm{KL}(P \,\|\, Q) = \sum_{t \ge 1} \mathbb{E}_P\Big[\mathrm{KL}\big(P(\cdot \mid x_{<t}) \,\big\|\, Q(\cdot \mid x_{<t})\big)\Big].
+\]
+
+The perplexity of a model \(q\) on a text \(x_{1}, \ldots, x_T\) is
+\(\exp\bigl(-(1/T) \sum_{t} \log q(x_{t} \mid \text{earlier tokens})\bigr)\): the
+exponential of the average per-token cross-entropy. A perplexity of \(k\)
+means the model is, on average, as uncertain as a uniform choice among \(k\)
+tokens.
+
+\subsection{Approximation theory}\label{sec:math:I11}
+
+Approximation theory asks which functions a class of networks can
+represent, and at what cost. Its results are existence statements: they
+say nothing about whether training finds the approximating network, or
+whether it generalizes.
+
+\textbf{Density in \(C(K)\) and Stone--Weierstrass.} Let \(K \subset
+\mathbb{R}^{d}\) be compact. The Stone--Weierstrass theorem states
+that a subalgebra of \(C(K)\) that contains the constants and separates
+points is dense in the sup norm. The span of the exponentials \(x \mapsto
+e^{w\cdot x + b}\) is such an algebra, since \(e^{a\cdot x}\cdot e^{b\cdot x}
+= e^{(a+b)\cdot x}\): networks with exponential units are therefore dense in
+\(C(K)\). The exponential is the nonlinearity inside softmax attention.
+
+\textbf{Universality of shallow networks.} For standard activations \(\sigma\)
+the span of \(\{\sigma(w\cdot x + b)\}\) is not an algebra, and other arguments are
+needed. Cybenko (1989) proved density for sigmoidal activations by
+duality: if the span were not dense, Hahn--Banach would give a nonzero
+continuous functional vanishing on it, which by the Riesz--Markov
+theorem is a nonzero signed measure, and the sigmoidal structure forces
+that measure to be zero. Leshno, Lin, Pinkus and Schocken (1993) gave
+the sharp statement: for continuous \(\sigma\), the span is dense in \(C(K)\) if and
+only if \(\sigma\) is not a polynomial. Density can also be stated in \(L^p(\mu)\);
+by \S\ref{sec:math:I4} the two statements are different claims.
+
+\textbf{Rates and regularity classes.} Density gives no rate. Rates
+require assuming the target is regular, and the regularity scales are
+those of \S\ref{sec:math:I5}.
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Sobolev classes and the curse of dimensionality.} For \(f\) in the
+  unit ball of \(W^{n,\infty}([0,1]^d)\), Yarotsky (2017)
+  shows that deep ReLU networks reach sup-norm accuracy \(\varepsilon\) with
+  \(O(\varepsilon^{-d/n} \log(1/\varepsilon))\) weights and \(O(\log(1/\varepsilon))\) depth. The exponent
+  \(d/n\) expresses the curse of dimensionality: the required size grows as
+  a power of \(1/\varepsilon\) whose exponent is proportional to the dimension and
+  inversely proportional to the smoothness.
+\item
+  \textbf{Optimality.} Continuous nonlinear widths (DeVore, Howard and
+  Micchelli) show that \(\varepsilon^{-d/n}\) cannot be beaten when the parameters
+  depend continuously on \(f\).~Very deep networks with discontinuous
+  parameter selection can beat it (Yarotsky, 2018); this is unrelated to
+  the ``super-convergence'' of learning-rate schedules (Smith and Topin).
+\item
+  \textbf{Besov classes.} Besov spaces capture smoothness that varies
+  across the domain, such as functions that are smooth except near local
+  singularities. Deep networks adapt to this inhomogeneity, while linear
+  methods, which approximate from a fixed subspace, provably cannot
+  (Suzuki, 2019).
+\item
+  \textbf{Barron classes.} For functions with a finite first Fourier
+  moment, \(\int |\omega|\, |\hat{f}(\omega)|\, d\omega <
+  \infty\), shallow networks with \(N\) units achieve \(L^{2}\) error
+  \(O(C_f N^{-1/2})\) (Barron, 1993). The exponent does not depend on \(d\),
+  although the constant \(C_f\) can. The proof is
+  Fourier-analytic (\S\ref{sec:math:I8}).
+\end{itemize}
+
+The hypotheses of these results differ in detail and should be taken
+from the original sources; DeVore, Hanin and Petrova, \emph{Neural
+Network Approximation} (Acta Numerica, 2021), is a single reference
+covering most of them.
+
+\section{The Original Transformer}\label{sec:math-original}
+
+The Transformer of Vaswani et al.,
+\emph{\href{https://arxiv.org/abs/1706.03762}{Attention Is All You
+Need}} (2017), replaced recurrence and convolution in sequence
+transduction with attention alone. This section describes it as the paper
+does, with light notation; Section~\ref{sec:math-operators} analyzes it.
+
+\subsection{The task and the overall
+architecture}\label{sec:math:II1}
+
+The model was built for machine translation. An encoder maps a source
+sequence of symbol representations to continuous representations \(z =
+(z_{1}, \ldots, z_{n})\). A decoder then generates the target
+sequence one symbol at a time, auto-regressively, consuming its previous
+outputs as additional input.
+
+Both stacks have \(N = 6\) identical layers of width \(d_{\text{model}} = 512\).
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Encoder layer:} multi-head self-attention, then a
+  position-wise feed-forward network.
+\item
+  \textbf{Decoder layer:} masked multi-head self-attention, then
+  multi-head attention over the encoder output, then a feed-forward
+  network.
+\end{itemize}
+
+Each sub-layer is wrapped in a residual connection followed by layer
+normalization, so its output is \(\operatorname{LayerNorm}(x + \operatorname{Sublayer}(x))\). This is the
+post-norm arrangement.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.44\linewidth}>{\raggedright\arraybackslash}p{0.44\linewidth}@{}}
+\caption{Data flow in the original encoder--decoder Transformer.}\\
+\toprule
+Stage & Feeds into \\
+\midrule
+\endfirsthead
+\toprule
+Stage & Feeds into \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+Source tokens & Encoder: 6 layers self-attention + FFN \\
+Encoder: 6 layers self-attention + FFN & Cross-attention in every decoder layer \\
+Previous outputs & Decoder: 6 layers masked self-attention + FFN \\
+Cross-attention in every decoder layer & Decoder: 6 layers masked self-attention + FFN \\
+Decoder: 6 layers masked self-attention + FFN & Linear + softmax next-token probabilities \\
+\end{longtable}
+
+The encoder reads the whole source; the decoder reads its own past
+outputs and, through cross-attention, the encoder's output.
+
+\subsection{Scaled dot-product
+attention}\label{sec:math:II2}
+
+Queries and keys have dimension \(d_k\) and values dimension \(d_v\). Packing
+them into matrices \(Q\), \(K\), \(V\), the attention function is
+
+\[
+\operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\Big(\frac{Q K^\top}{\sqrt{d_k}}\Big) V.
+\]
+
+Each output is a weighted sum of values, with weights given by a
+compatibility function of the query and the keys. The authors explain
+the factor \(1/\sqrt{d_k}\) as a remedy: they suspected that for large \(d_k\) the
+dot products grow large and push the softmax into regions with very
+small gradients.
+
+\subsection{Multi-head attention}\label{sec:math:II3}
+
+Instead of one attention function at full width, the model projects
+queries, keys and values \(h\) times with learned matrices and runs
+attention in parallel:
+
+\[
+\operatorname{MultiHead}(Q, K, V) = \operatorname{Concat}(\mathrm{head}_1, \dots, \mathrm{head}_h)\, W^O, \qquad \mathrm{head}_i = \operatorname{Attention}(Q W_i^Q, K W_i^K, V W_i^V).
+\]
+
+The base model uses \(h = 8\) heads with \(d_k = d_v = 64\). The authors'
+motivation is that multiple heads let the model attend jointly to
+information from different representation subspaces. In their ablations,
+reducing the key size \(d_k\) hurt quality, which they read as a sign that
+determining compatibility is not easy.
+
+\subsection{Three uses of
+attention}\label{sec:math:II4}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Encoder self-attention:} queries, keys and values all come
+  from the previous encoder layer, and every position attends to every
+  position.
+\item
+  \textbf{Masked decoder self-attention:} each position attends only to
+  positions up to and including itself. Illegal connections are masked
+  by setting their softmax inputs to \(-\infty\). Combined with shifting the
+  output embeddings by one position, this makes the prediction at
+  position \(i\) depend only on outputs before \(i\).
+\item
+  \textbf{Encoder--decoder attention:} queries come from the previous
+  decoder layer; keys and values come from the encoder output, so every
+  decoder position can attend over the whole input.
+\end{enumerate}
+
+\subsection{Feed-forward networks, embeddings, and the output
+layer}\label{sec:math:II5}
+
+Each layer applies the same two-layer network to every position
+separately, \(\operatorname{FFN}(x) = \max(0, xW_{1} + b_{1})W_{2} +
+b_{2}\), with inner dimension 2048. Input and output tokens are
+embedded by learned matrices, and a linear map followed by a softmax
+converts the decoder output into next-token probabilities. The two
+embedding matrices and the pre-softmax linear map share one weight
+matrix; in the embedding layers it is multiplied by \(\sqrt{d_{\text{model}}}\).
+
+\subsection{Positional encoding}\label{sec:math:II6}
+
+With no recurrence or convolution, order must be injected explicitly.
+The model adds sinusoidal encodings to the input embeddings:
+
+\[
+PE_{(pos,\,2i)} = \sin\!\big(pos / 10000^{2i/d_{model}}\big), \qquad PE_{(pos,\,2i+1)} = \cos\!\big(pos / 10000^{2i/d_{model}}\big).
+\]
+
+The wavelengths form a geometric progression from \(2\pi\) to \(10000\cdot 2\pi\). The
+authors chose sinusoids because, for any fixed offset \(k\), \(PE(pos + k)\) is
+a linear function of \(PE(pos)\), which they expected to make attention by
+relative position easy to learn.
+
+\subsection{Why self-attention}\label{sec:math:II7}
+
+The paper compares layer types by cost per layer, parallelism, and the
+longest path a signal travels between two positions (\(n\) = sequence
+length, \(d\) = width, \(k\) = kernel size, \(r\) = neighborhood size).
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Layer type
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Complexity per layer
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Sequential operations
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Maximum path length
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Self-attention & \(O(n^{2}\cdot d)\) & \(O(1)\) & \(O(1)\) \\
+Recurrent & \(O(n\cdot d^{2})\) & \(O(n)\) & \(O(n)\) \\
+Convolutional & \(O(k\cdot n\cdot d^{2})\) & \(O(1)\) & \(O(\log_k(n))\) \\
+Restricted self-attention & \(O(r\cdot n\cdot d)\) & \(O(1)\) & \(O(n/r)\) \\
+\end{longtable}
+
+Self-attention connects every pair of positions in a constant number of
+steps. The cost is quadratic in \(n\), and the authors already proposed
+restricting attention to a neighborhood of size \(r\) for very long
+sequences.
+
+\subsection{Training and
+decoding}\label{sec:math:II8}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Data:} WMT 2014 English--German (about 4.5 million sentence
+  pairs, a shared byte-pair vocabulary of about 37,000 tokens) and
+  English--French (36 million sentences, a 32,000 word-piece
+  vocabulary).
+\item
+  \textbf{Optimization:} Adam with \(\beta_{1} = 0.9\), \(\beta_{2} = 0.98\) and
+  \(\varepsilon = 10^{-9}\), with a learning rate that rises linearly for 4000
+  warm-up steps and then decays as the inverse square root of the step
+  number.
+\item
+  \textbf{Regularization:} dropout on sub-layer outputs and on the sums
+  of embeddings and positional encodings (rate 0.1 for the base model),
+  and label smoothing of 0.1, which the authors note hurts perplexity
+  but improves accuracy and BLEU.
+\item
+  \textbf{Decoding:} beam search with beam size 4 and length penalty
+  0.6, with maximum output length set to the input length plus 50 and
+  early termination when possible.
+\end{itemize}
+
+\subsection{Results}\label{sec:math:II9}
+
+The big model reached 28.4 BLEU on WMT 2014 English--German, more than 2
+BLEU above the best previous results, ensembles included, after 3.5 days
+on eight P100 GPUs. On English--French it set a single-model state of
+the art: 41.0 BLEU in the first arXiv version, reported as 41.8 in the
+revised version. A 4-layer model also performed strongly on English
+constituency parsing, showing that the architecture generalized beyond
+translation.
+
+\section{The Transformer as Operators and Measures}\label{sec:math-operators}
+
+This section rewrites the model of Section~\ref{sec:math-original} in the language of
+Section~\ref{sec:math-tools}. The
+whole network is a composition of operators on finite-dimensional
+Hilbert spaces, written with \(\circ\). Only its last factor has a codomain that
+is not a vector space: the set of probability measures on the \(\sigma\)-algebra
+of token events, from which the next token is sampled.
+
+\subsection{The Transformer as a composition of
+operators}\label{sec:math:IV1}
+
+The 2017 Transformer is a chain of maps, each with a stated domain and
+codomain. Every map but the last sends one finite-dimensional Hilbert
+space into another; the last sends a Hilbert space into the set of
+probability measures on the vocabulary.
+
+\textbf{Notation.} \(\mathcal{V}\) is the vocabulary, with
+\(|\mathcal{V}| \approx 37{,}000\) shared byte-pair tokens for
+English--German. \(d = d_{\text{model}} = 512\). The source sentence is \(x =
+(x_{1}, \ldots, x_n) \in \mathcal{V}^{n}\); the target prefix is
+\(y_{<t} = (y_{1}, \ldots, y_{t-1})\). All states are matrices
+in \(\mathbb{R}^{n\times d}\), a Hilbert space under the Frobenius inner
+product (\S\ref{sec:math:I1}).
+
+\textbf{Building blocks.} The table lists every operator in the order of
+evaluation.
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Operator
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Map
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Definition
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Type
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+One-hot encoding \(\iota\) & \(\mathcal{V}^{n} \to
+\mathbb{R}^{n\times |\mathcal{V}|}\) & row \(i\) is the basis vector
+\(e_{x_i}\) & injective, measurable \\
+Embedding \(\varepsilon\) & \(\mathbb{R}^{n\times |\mathcal{V}|} \to
+\mathbb{R}^{n\times d}\) & \(\varepsilon(A) = \sqrt{d}\cdot A W_E\), with \(W_E \in
+\mathbb{R}^{|\mathcal{V}|\times d}\) & linear \\
+Positional shift \(\tau\) & \(\mathbb{R}^{n\times d} \to
+\mathbb{R}^{n\times d}\) & \(\tau(X) = X + P_n\), with \(P_n\) the sinusoidal
+table & affine (a translation) \\
+Multi-head attention \(M\) & \(\mathbb{R}^{n\times d} \times
+\mathbb{R}^{m\times d} \to \mathbb{R}^{n\times d}\) & \(M(X; Y) = \sum_h
+\operatorname{softmax}(XW_h^Q \allowbreak (YW_h^K)^{\top} \allowbreak / \sqrt{d_k} + \mathrm{Mask})\allowbreak\, Y W_h^V
+W_h^O\) & nonlinear \\
+Feed-forward \(F\) & \(\mathbb{R}^{n\times d} \to \mathbb{R}^{n\times d}\)
+& \(F(X) = \max(0, XW_{1} + b_{1}) W_{2} + b_{2}\), row by
+row & piecewise linear \\
+Layer normalization \(\mathrm{LN}\) & \(\mathbb{R}^{n\times d} \to
+\mathbb{R}^{n\times d}\) & each row centred, divided by its standard
+deviation, then scaled and shifted & nonlinear, smooth \\
+Row selection \(\pi_t\) & \(\mathbb{R}^{m\times d} \to \mathbb{R}^{d}\) &
+\(\pi_t(Y)\) = row \(t\) of \(Y\) & linear \\
+Logit map \(\lambda\) & \(\mathbb{R}^{d} \to
+\mathbb{R}^{|\mathcal{V}|}\) & \(\lambda(h) = W_E h\),
+the same \(W_E\) as the embedding & linear \\
+Softmax \(\sigma\) & \(\mathbb{R}^{|\mathcal{V}|} \to
+\Delta(\mathcal{V})\) & \(\sigma(z)_v = e^{z_v} / \sum_u e^{z_u}\) &
+nonlinear, into the simplex \\
+\end{longtable}
+
+The sum over heads in \(M\) is the concatenation of Section~\ref{sec:math-original} written with
+\(W^O\) split into blocks \(W_h^O\). Setting \(Y = X\) gives self-attention;
+a mask of \(-\infty\) above the diagonal makes it causal.
+
+\textbf{Sublayers as compositions.} Each sublayer \(G\) is wrapped in a
+residual connection and a normalization. As an operator this is a
+composition:
+
+\[
+R_G \;=\; \mathrm{LN}\circ(\mathrm{Id} + G), \qquad R_G(X) = \mathrm{LN}\big(X + G(X)\big).
+\]
+
+\textbf{Encoder.} Encoder layer \(\ell\) applies self-attention
+\(S_\ell(X) = M_\ell(X; X)\) and then the feed-forward map
+\(F_\ell\). The embedding is \(E = \tau\circ\varepsilon\circ\iota\). The encoder is the six-fold
+composition
+
+\[
+\mathrm{Enc} \;=\; L^{\mathrm{enc}}_6\circ L^{\mathrm{enc}}_5\circ\cdots\circ L^{\mathrm{enc}}_1\circ E, \qquad L^{\mathrm{enc}}_\ell = R_{F_\ell}\circ R_{S_\ell}.
+\]
+
+It maps \(\mathcal{V}^{n}\) to \(\mathbb{R}^{n\times d}\). Its output \(H
+= \mathrm{Enc}(x)\) is called the memory.
+
+\textbf{Decoder.} Decoder layer \(\ell\) has three sublayers: causal
+self-attention \(\tilde{S}_\ell\), cross-attention \(C_\ell[H] =
+M_\ell(Y; H)\) reading the memory, and the feed-forward map. The
+memory enters as a fixed parameter of each decoder layer:
+
+\[
+L^{\mathrm{dec}}_\ell[H] \;=\; R_{F_\ell}\circ R_{C_\ell[H]}\circ R_{\tilde S_\ell}, \qquad \mathrm{Dec}[H] \;=\; L^{\mathrm{dec}}_6[H]\circ\cdots\circ L^{\mathrm{dec}}_1[H]\circ E .
+\]
+
+\textbf{The whole model.} The decoder reads the prefix shifted right by
+one position, \((\langle s\rangle, y_{1}, \ldots, y_{t-1})\), where \(\langle s\rangle\) is a start
+symbol. The next-token distribution is
+
+\[
+p_\theta(\,\cdot \mid x, y_{<t}) \;=\; \big(\sigma\circ\lambda\circ\pi_t\circ \mathrm{Dec}[\mathrm{Enc}(x)]\big)\big(\langle s\rangle, y_1,\dots,y_{t-1}\big).
+\]
+
+\(\theta\) collects every weight matrix, bias and normalization parameter.
+Written out, one prediction is a composition of \(3 + 6\cdot 2\cdot 2 + 3 + 6\cdot 3\cdot 2 +
+3 = 69\) elementary maps (two embeddings of three maps each, every encoder
+and decoder sublayer counted as a residual map plus a normalization,
+then readout, logits and softmax).
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.44\linewidth}>{\raggedright\arraybackslash}p{0.44\linewidth}@{}}
+\caption{The Transformer as a chain of operators, from source tokens to a sampled token.}\\
+\toprule
+Stage & Feeds into \\
+\midrule
+\endfirsthead
+\toprule
+Stage & Feeds into \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+Source \(x \in \mathcal{V}^{n}\) & Embedding \(E\) \\
+Embedding \(E\) & Encoder: six layers \\
+Encoder: six layers & Memory \(H\) \\
+Prefix \(y_{<t} \in \mathcal{V}^{t-1}\) & Embedding \(E\) \\
+Embedding \(E\) & Decoder: six layers \\
+Memory \(H\) & Decoder: six layers \\
+Decoder: six layers & Row \(t\): \(\pi_t\) \\
+Row \(t\): \(\pi_t\) & Logits: \(\lambda\) \\
+Logits: \(\lambda\) & Softmax: \(\sigma\) \\
+Softmax: \(\sigma\) & Measure on \(\mathcal{V}\) \\
+Measure on \(\mathcal{V}\) & Sampled token \(y_t\) \\
+\end{longtable}
+
+Every factor before \(\sigma\) has a Hilbert space as its codomain. \(\sigma\) changes the
+type of object: its values are points of the simplex \(\Delta(\mathcal{V})\),
+which \S\ref{sec:math:IV5} identifies with the probability measures on
+\((\mathcal{V}, 2^{\mathcal{V}})\). The last arrow is not a
+deterministic function of the measure: it requires an independent source
+of randomness (\S\ref{sec:math:IV5}).
+
+\subsection{The operators one by
+one}\label{sec:math:IV2}
+
+The properties of the composite follow from those of its factors: linear
+maps contribute their operator norms, the nonlinear maps their local
+behavior, and the chain rule assembles them.
+
+\textbf{Linear and affine factors.} \(\iota\), \(\varepsilon\), \(\pi_t\) and \(\lambda\) are linear, and \(\tau\)
+is a translation. Their Lipschitz constants are operator norms (\S\ref{sec:math:I2}):
+for instance \(\varepsilon\) is \(\sqrt{d}\cdot\sigma_{\max}(W_E)\)-Lipschitz, where \(\sigma_{\max}\) is the
+largest singular value (\S\ref{sec:math:I3}). The input \(x\) itself is discrete;
+continuity questions start after \(\iota\), which embeds \(\mathcal{V}^{n}\)
+into \(\mathbb{R}^{n\times |\mathcal{V}|}\).
+
+\textbf{Layer normalization is a projection followed by a radial map.}
+For a row \(x \in \mathbb{R}^{d}\),
+
+\[
+\mathrm{LN}(x) = \gamma \odot \frac{Px}{\sqrt{\|Px\|^2/d + \epsilon}} + \beta, \qquad P = I - \tfrac{1}{d}\mathbf 1\mathbf 1^\top .
+\]
+
+\(P\) is the orthogonal projection onto the hyperplane orthogonal to the
+all-ones vector (the projection theorem of \S\ref{sec:math:I1}). The radial factor
+sends \(Px\) into the ball of radius \(\sqrt{d}\) in that hyperplane. \(\mathrm{LN}\) therefore
+maps all of \(\mathbb{R}^{d}\) into a compact set, which is what makes
+the finite-precision arguments of \S\ref{sec:math:I9} and \S\ref{sec:math:IV5} possible. \(\mathrm{LN}\) is smooth because \(\epsilon
+> 0\). On the hyperplane its Jacobian has norm at most
+\(\max|\gamma|/\sqrt{\epsilon}\), so it is globally Lipschitz but with a very
+large constant for small \(\epsilon\); for rows with variance near 1 its local
+constant is about \(\max|\gamma|\).
+
+\textbf{Feed-forward layers.} \(F = ({\cdot}W_{2} + b_{2})\circ\operatorname{ReLU}\circ
+({\cdot}W_{1} + b_{1})\) is piecewise linear. ReLU is 1-Lipschitz, so \(F\)
+is \(\|W_{1}\|_{2}\|W_{2}\|_{2}\)-Lipschitz. In the language of
+\S\ref{sec:math:I5}, \(F\) belongs to \(W^{1,\infty}_{\mathrm{loc}}\): its weak derivative exists and is
+bounded, and its curvature is concentrated on the hyperplanes where a
+ReLU unit changes sign.
+
+\textbf{Attention} is real-analytic in its input, hence locally
+Lipschitz, but not globally Lipschitz (\S\ref{sec:math:IV3}).
+
+\textbf{Residual maps.} If \(G\) is \(L\)-Lipschitz, \(\mathrm{Id} + G\) is
+\((1 + L)\)-Lipschitz. Lipschitz constants multiply under composition, so the
+whole chain of \S\ref{sec:math:IV1} is Lipschitz on bounded sets with constant at most
+the product of the 69 factors' constants. That bound is valid but far
+from sharp; the informative object is the Jacobian at a given input.
+
+\textbf{The chain rule for the whole model.} Write the chain as \(\Phi = \Phi_N
+\circ\cdots\circ\Phi_{1}\) with states \(X_k = \Phi_k(X_{k-1})\). Wherever every factor
+is differentiable,
+
+\[
+D\Phi(X_0) = D\Phi_N(X_{N-1})\, D\Phi_{N-1}(X_{N-2}) \cdots D\Phi_1(X_0), \qquad \nabla_{X_0}\ell = D\Phi(X_0)^\top \nabla \ell .
+\]
+
+Backpropagation evaluates the second formula starting from the output:
+it applies \(D\Phi_N^{\top}\) to \(\nabla\ell\), then \(D\Phi_{N-1}^{\top}\), and
+so on down to the input, multiplying transposed Jacobians onto a vector
+without ever forming a full Jacobian matrix. Because ReLU is not
+differentiable at zero, some care is needed. Rademacher's theorem
+(\S\ref{sec:math:I2}) makes the whole network differentiable almost everywhere,
+but it does not by itself guarantee that the product of layer Jacobians
+computed by backpropagation equals that derivative: a composition can
+sit on a kink of an inner unit on a set of positive measure (a dead unit,
+or the convention \(\operatorname{ReLU}'(0) = 0\)). For piecewise-analytic networks
+such as this one, backpropagation returns the true gradient almost
+everywhere and an element of a conservative field everywhere (Kakade and
+Lee, 2018; Bolte and Pauwels, 2021).
+
+\textbf{Post-norm changes the Jacobian of each block.} For \(R_G = \mathrm{LN}\circ
+(\mathrm{Id} + G)\),
+
+\[
+DR_G(X) = D\mathrm{LN}\big(X + G(X)\big)\,\big(I + DG(X)\big).
+\]
+
+The identity term is multiplied by the Jacobian of the normalization. A
+gradient reaching the encoder input passes through the normalization
+Jacobian of every sublayer on its path, and there is no identity path
+through the stack. Xiong et al.~(2020) relate this to the 2017 model's
+dependence on learning-rate warm-up; the pre-norm form \(X + G(\mathrm{LN}(X))\),
+whose Jacobian is \(I + DG\cdot D\mathrm{LN}\), restores a direct identity path.
+
+\textbf{Summary of regularity.} The composite map from the one-hot input
+to the logits is piecewise real-analytic: analytic on each region where
+the ReLU activation pattern is fixed, locally Lipschitz everywhere,
+differentiable almost everywhere, and in \(W^{1,\infty}_{\mathrm{loc}}\). The softmax
+that follows is analytic, so every next-token probability is a locally
+Lipschitz function of the embedded input and of \(\theta\).
+
+\subsection{Attention as a data-dependent Markov
+kernel}\label{sec:math:IV3}
+
+Inside the network, probability measures already appear before the last
+layer: every attention head builds one measure over positions for each
+query, and outputs an expectation under it.
+
+\textbf{One head.} For queries from \(X \in \mathbb{R}^{n\times d}\) and
+keys and values from \(Y \in \mathbb{R}^{m\times d}\), the head computes
+scores, a row-stochastic matrix, and values:
+
+\[
+A = \frac{XW^Q\,(YW^K)^\top}{\sqrt{d_k}} + \mathrm{Mask}, \qquad P = \operatorname{softmax}_{\mathrm{row}}(A), \qquad \mathrm{head}(X;Y) = P\,YW^V .
+\]
+
+Row \(i\) of \(P\) is a probability measure on the finite set of key positions
+\(\{1, \ldots, m\}\) with its power-set \(\sigma\)-algebra: a Markov kernel from
+query positions to key positions (\S\ref{sec:math:I6}). Row \(i\) of the output is an
+expectation:
+
+\[
+\mathrm{head}(X;Y)_i = \sum_{j=1}^{m} P_{ij}\,(YW^V)_j = \mathbb E_{j\sim P_{i\cdot}}\big[(YW^V)_j\big].
+\]
+
+The kernel is recomputed from the input at every forward pass. This
+dependence is the source of attention's nonlinearity: for fixed \(P\) the
+map \(Y \mapsto P Y W^V\) would be linear.
+
+\textbf{Three kernels in the 2017 model.}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Sublayer
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Kernel
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Shape
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Support of row \(i\)
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Encoder self-attention & source positions to source positions & \(n \times n\),
+all entries positive & all of \(\{1, \ldots, n\}\) \\
+Decoder self-attention & target positions to target positions & \(m \times m\),
+lower triangular & \(\{1, \ldots, i\}\) \\
+Cross-attention & target positions to source positions & \(m \times n\), all
+entries positive & all of \(\{1, \ldots, n\}\) \\
+\end{longtable}
+
+A causal mask sets scores above the diagonal to \(-\infty\). By \S\ref{sec:math:I7} this is
+conditioning: row \(i\) is the unmasked measure conditioned on the event
+\(\{j \le i\}\).
+
+\textbf{Norms.} Each output coordinate is a convex combination of value
+coordinates, so \(P\) is non-expansive in the maximum norm: \(\|P\|_{\infty\to\infty} = 1\).
+In the Euclidean norm it is not: \(\|P\|_{2}\) can reach \(\sqrt{m}\) (\S\ref{sec:math:I3}).
+
+\textbf{Local but not global Lipschitz continuity.} Each row of the
+softmax has Jacobian \(\operatorname{diag}(p) - pp^{\top}\) (\S\ref{sec:math:I7}), and the scores are
+quadratic in the input. The head is therefore real-analytic and locally
+Lipschitz, but its sensitivity grows with the size of its input, and
+dot-product self-attention is not globally Lipschitz (Kim, Papamakarios
+and Mnih, 2021). In the post-norm
+2017 model every attention sublayer after the first reads a
+layer-normalized state, which lies in a compact set (\S\ref{sec:math:IV2}). On that set
+attention is Lipschitz. The factor \(1/\sqrt{d_k}\) keeps the score variance near
+1 when query and key components have unit variance, which keeps the
+softmax away from saturation.
+
+\textbf{Permutation equivariance of the encoder.} Let \(\Pi\) be an \(n \times n\)
+permutation matrix. With no mask, \(\operatorname{softmax}_{\mathrm{row}}(\Pi A\Pi^{\top}) = \Pi\,
+\operatorname{softmax}_{\mathrm{row}}(A)\, \Pi^{\top}\), and therefore
+
+\[
+S(\Pi X) = \Pi\, S(X), \qquad F(\Pi X) = \Pi F(X), \qquad \mathrm{LN}(\Pi X) = \Pi\,\mathrm{LN}(X).
+\]
+
+Every encoder layer is permutation-equivariant. Only the positional
+translation \(\tau\) breaks the symmetry, since \(P_n\) is not
+permutation-invariant: all information about word order in the encoder
+comes from \(\tau\). The decoder's causal mask is not permutation-invariant, so
+the decoder is not equivariant, and the mask itself carries order
+information.
+
+\textbf{Cross-attention depends on the memory only through its empirical
+measure.} Permuting the rows of the memory \(H\) permutes keys and values
+together, so \(C[\Pi H] = C[H]\). The output depends on \(H\) only through
+the empirical measure \(\mu_H = (1/n) \sum_j \delta_{h_j}\) of its rows:
+
+\[
+C[H](y) = \frac{\int e^{\langle yW^Q,\, hW^K\rangle/\sqrt{d_k}}\; hW^V\, d\mu_H(h)}{\int e^{\langle yW^Q,\, hW^K\rangle/\sqrt{d_k}}\, d\mu_H(h)} .
+\]
+
+This is the Nadaraya--Watson form of the integral operator of \S\ref{sec:math:I4} with
+the exponential kernel. The positive definiteness of \S\ref{sec:math:I4}, and with it
+Mercer's theorem, holds in the projected variables \(q = yW^Q\) and \(k = hW^K\).
+As a function of \((y, h)\) itself the kernel is \(e^{yBh^{\top}/\sqrt{d_k}}\) with
+\(B = W^Q (W^K)^\top\), which is neither symmetric nor positive definite. Order in the source survives only because \(\tau\) has
+written positions into the rows of \(H\).
+
+\textbf{Stacking kernels.} Composing attention layers multiplies
+row-stochastic matrices, as in a Markov chain. The Dobrushin coefficient
+\(\delta(P) = \tfrac12 \max_{i,k} \sum_j |P_{ij} - P_{kj}|\) is
+submultiplicative, \(\delta(PQ) \le \delta(P)\, \delta(Q)\), and it measures how far apart the
+rows of \(P\) are. Every entry of an unmasked softmax kernel is positive, so
+\(\delta(P) < 1\): each unmasked layer strictly contracts the
+differences between rows. Pure attention stacks therefore drive all rows
+toward a common value and lose rank with depth (Dong, Cordonnier and
+Loukas, 2021). The residual maps \(\mathrm{Id} + G\) and the feed-forward layers of
+\S\ref{sec:math:IV1} are what prevent this collapse.
+
+\subsection{Spectral structure: heads, weight tying and positional
+rotations}\label{sec:math:IV4}
+
+The nonlinear operators of \S\ref{sec:math:IV1} are built from linear maps, and those
+linear maps have the spectral structure of \S\ref{sec:math:I3}.
+
+\textbf{Each head compares tokens through a low-rank bilinear form.}
+Before the softmax, head \(h\) scores a query row \(x\) against a key row \(y\) by
+
+\[
+b_h(x, y) = \frac{x^\top B_h\, y}{\sqrt{d_k}}, \qquad B_h = W_h^Q (W_h^K)^\top \in \mathbb R^{512\times 512}, \qquad \operatorname{rank} B_h \le d_k = 64 .
+\]
+
+With the SVD \(B_h = \sum_{r\le 64} s_r u_r v_r^{\top}\), the head
+compares the components of the query along \(u_r\) with those of the key
+along \(v_r\), weighted by \(s_r\). It depends only on the projections of the
+query and the key onto 64-dimensional subspaces of the 512-dimensional
+representation.
+
+\textbf{Asymmetry.} Split \(B_h\) into symmetric and skew-symmetric parts,
+\(B_h = \tfrac12(B_h + B_h^{\top}) + \tfrac12(B_h - B_h^{\top})\). The skew
+part is why \(b_h(x, y) \neq b_h(y, x)\) in general: token \(i\) can assign large
+weight to token \(j\) while \(j\) assigns small weight to \(i\). The skew part is not
+the only source: the softmax normalizes each row separately, so the
+attention weights are asymmetric in general even when \(B_h\) is symmetric.
+
+\textbf{The output of each head lies in a low-rank subspace.} The value
+and output maps combine into \(C_h = W_h^V W_h^O \in
+\mathbb{R}^{512\times 512}\), also of rank at most 64. Multi-head
+attention is
+
+\[
+M(X;Y) = \sum_{h=1}^{8} P_h(X;Y)\; Y\, C_h ,
+\]
+
+a sum of eight terms, each confined to the at most 64-dimensional row
+space of its \(C_h\). This is the precise form of the paper's motivation
+that heads attend to information from different representation
+subspaces. By Eckart--Young (\S\ref{sec:math:I3}), the singular values of \(B_h\) and \(C_h\)
+measure how far each head can be compressed.
+
+\textbf{Scores are low rank; the kernel need not be.} The score matrix
+of a head has rank at most 64, but the exponential inside the softmax
+acts entrywise and can raise the rank. The kernel \(P_h\) may be full rank
+even though its scores are not.
+
+\textbf{Weight tying and Riesz representation.} The logit map uses the
+embedding matrix: \(\lambda(h)_v = \langle e_v, h\rangle\), where \(e_v\) is row \(v\) of \(W_E\). By
+the Riesz representation theorem (\S\ref{sec:math:I1}), every linear functional on
+\(\mathbb{R}^{d}\) is an inner product with a unique vector. Tying
+weights means that the vector representing token \(v\) at the input is also
+the representer of the functional that scores \(v\) at the output.
+
+\textbf{Positional encoding is a rotation.} Group the 512 coordinates of
+\(P_n\) into 256 pairs, pair \(j = 0, \ldots, 255\) oscillating at frequency \(\omega_j =
+10000^{-2j/512}\). Write pair \(j\) as a complex number, \(z_j(\mathrm{pos}) =
+e^{i\omega_j \cdot \mathrm{pos}}\), with \(i\) the imaginary unit. A shift by \(k\) positions is
+then multiplication by \(e^{i\omega_j k}\):
+
+\[
+PE(pos + k) = R(k)\, PE(pos), \qquad R(k) = \operatorname{diag}\big(R_{-\omega_0 k}, \dots, R_{-\omega_{255} k}\big),
+\]
+
+with \(R_\theta\) the \(2 \times 2\) rotation by \(\theta\). The sign is negative because each
+pair is stored in the order \((\sin, \cos)\). \(R(k)\) is orthogonal, so all its
+singular values are 1: this is the linear shift property the authors
+cite, and the shift theorem of \S\ref{sec:math:I8}. A single pair determines position
+only modulo its period \(2\pi/\omega_j\); the geometric progression of periods,
+from \(2\pi\) to \(2\pi \cdot 10000^{510/512} \approx 60{,}611\), resolves positions over a
+range set by the longest period (\S\ref{sec:math:I8}).
+
+\textbf{Where position enters the score.} Because \(\tau\) adds \(P_n\) to the
+content, a score expands into four terms:
+
+\[
+(x_i + p_i)^\top B\,(x_j + p_j) = x_i^\top B x_j + x_i^\top B p_j + p_i^\top B x_j + p_i^\top B p_j .
+\]
+
+The last term depends on positions only, but in general on both \(i\) and \(j\),
+not only on \(i - j\): \(p_i^{\top} B R(j - i) p_i\) still depends on \(p_i\)
+unless \(B\) commutes with the rotations. Relative position is available to
+the model but not built into the score. Later rotary encodings (Su et al., 2021) multiply
+queries and keys by rotations instead of adding, which makes every score
+depend on position only through \(i - j\).
+
+\subsection{\texorpdfstring{The last layer: a probability measure on the \(\sigma\)-algebra
+of token events}{The last layer: a probability measure on the sigma-algebra of token events}}\label{sec:math:IV5}
+
+The last three operators of \S\ref{sec:math:IV1}, \(\pi_t\), \(\lambda\) and \(\sigma\), turn a vector of the
+Hilbert space \(\mathbb{R}^{d}\) into a probability measure on a finite
+measurable space. Sampling then turns that measure into a token. This
+section makes each step precise.
+
+\textbf{Step 1: logits.} The decoder's last state at position \(t\) is \(h_t
+= \pi_t(\mathrm{Dec}[H](\langle\mathrm{s}\rangle, y_{1}, \ldots, y_{t-1})) \in
+\mathbb{R}^{512}\). The logit map gives one real number per token:
+
+\[
+z = \lambda(h_t) = W_E\, h_t \in \mathbb R^{|\mathcal V|}, \qquad z_v = \langle e_v, h_t\rangle .
+\]
+
+Each logit is a linear functional of \(h_t\) with Riesz representer \(e_v\)
+(\S\ref{sec:math:IV4}). Adding the same constant to every logit changes nothing below,
+so logits are really coordinates in the quotient space
+\(\mathbb{R}^{|\mathcal{V}|} /
+\mathbb{R}\mathbf{1}\) (\S\ref{sec:math:I7}).
+
+\textbf{Step 2: the measurable space of token events.} The next token
+takes values in the sample space \(\mathcal{V}\). Because
+\(\mathcal{V}\) is finite, the natural \(\sigma\)-algebra is its power set:
+
+\[
+(\mathcal V,\ 2^{\mathcal V}), \qquad |2^{\mathcal V}| = 2^{|\mathcal V|} \approx 2^{37\,000}.
+\]
+
+Every subset of the vocabulary is an event, closed under complement and
+union as \S\ref{sec:math:I6} requires. The atoms are the singletons \(\{v\}\), and every
+event is a finite union of atoms. Events have direct linguistic
+readings:
+
+\begin{itemize}
+\tightlist
+\item
+  \(\{v : v \text{ is a punctuation token}\}\), ``the next token is punctuation'';
+\item
+  \(\{v : v \text{ begins a new word}\}\), read off the byte-pair markers;
+\item
+  \(\{y_t\}\), ``the model produces the reference token'';
+\item
+  the top-\(k\) set of the current logits, an event chosen by the logits
+  themselves.
+\end{itemize}
+
+No measurability issues arise on this side: on a finite set every
+function is measurable. The continuous states of the network form the
+domain of the kernel, \(\mathbb{R}^{d}\) with its Borel \(\sigma\)-algebra.
+
+\textbf{Step 3: the probability measure.} The softmax assigns a mass to
+each atom, and additivity extends it to every event:
+
+\[
+P_t(S) \;=\; \sum_{v\in S} \sigma(z)_v \;=\; \sum_{v\in S}\frac{e^{z_v}}{\sum_{u\in\mathcal V} e^{z_u}}, \qquad S\in 2^{\mathcal V}.
+\]
+
+The axioms hold directly: \(P_t(S) \ge 0\), \(P_t(\mathcal{V}) = 1\), and
+\(P_t(S \cup S') = P_t(S) + P_t(S')\) for disjoint \(S\) and \(S'\). Since the
+\(\sigma\)-algebra is finite, countable additivity reduces to finite additivity.
+Every atom has positive mass, so the only null event is \(\emptyset\): \(P_t\) has the
+same null sets as the counting measure.
+
+\textbf{The simplex is the space of measures.} A probability measure on
+\((\mathcal{V}, 2^{\mathcal{V}})\) is determined by its values on
+atoms. The map \(p \mapsto \sum_v p_v \delta_v\) identifies the simplex
+\(\Delta(\mathcal{V}) = \{p \in
+\mathbb{R}^{|\mathcal{V}|} : p \ge 0, \sum_v p_v
+= 1\}\) with the set of all probability measures on \((\mathcal{V},
+2^{\mathcal{V}})\). The softmax is a bijection from
+\(\mathbb{R}^{|\mathcal{V}|}/\mathbb{R}\mathbf{1}\)
+onto the open simplex, the measures that charge every atom; its inverse
+is \(p \mapsto \log p\) up to a constant. The logits are thus the natural
+parameters of the categorical exponential family, and \(\sigma\) is the operator
+of \S\ref{sec:math:IV1} that changes the type of object: its codomain is a convex set
+of measures, not a vector space.
+
+\textbf{Step 4: the whole model is a Markov kernel.} Write \(\Phi_\theta\) for the
+deterministic part, the map from the context \((x, y_{<t})\) to
+\(h_t\), and \(\kappa_\theta(h, S) = \sum_{v\in S} \sigma(W_E h)_v\) for the last layer. \(\kappa_\theta\) is
+a Markov kernel from \((\mathbb{R}^{d}, \mathrm{Borel})\) to \((\mathcal{V},
+2^{\mathcal{V}})\): for each \(h\) it is a probability measure, and for
+each event \(S\) the map \(h \mapsto \kappa_\theta(h, S)\) is continuous, hence Borel
+measurable (\S\ref{sec:math:I6}). The model's conditional law is the kernel composed
+with the operator chain:
+
+\[
+P_\theta(S \mid x, y_{<t}) \;=\; \kappa_\theta\big(\Phi_\theta(x, y_{<t}),\, S\big), \qquad \Phi_\theta = \pi_t\circ\mathrm{Dec}[\mathrm{Enc}(x)] .
+\]
+
+Every factor of \(\Phi_\theta\) is a deterministic map between Hilbert spaces;
+randomness enters only through \(\kappa_\theta\).
+
+\textbf{Operations on the measure.} Decoding procedures act on \(P_t\)
+through the structure of \S\ref{sec:math:I7}:
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Operation
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+On the logits
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+On the measure
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Temperature \(\tau\) & \(z \mapsto z/\tau\) & moves along the Gibbs family; the maximizer of
+\(\langle p, z\rangle + \tau H(p)\) \\
+\(\tau \to 0\) & --- & \(P_t \to \delta\) at the most likely token, when it is unique \\
+\(\tau \to \infty\) & --- & \(P_t \to\) the uniform measure on \(\mathcal{V}\) \\
+Top-\(k\) or nucleus restriction to \(S\) & \(z_v \mapsto -\infty\) for \(v \notin S\) & conditioning:
+\(P_t(\cdot \mid S) = P_t(\cdot \cap S) / P_t(S)\) \\
+\end{longtable}
+
+\textbf{Step 5: sampling a token.} A measure is not a token. Sampling
+means constructing a random variable whose law is \(P_t\). Take a
+probability space carrying one uniform variable, (\([0, 1]\), Borel
+sets, Lebesgue measure), order the vocabulary as \(v_{1}, \ldots,
+v_K\), and let \(F_k = \sum_{j\le k} P_t(\{v_j\})\) with \(F_{0} = 0\). Define
+
+\[
+Y_t(u) = v_k \quad\text{when}\quad F_{k-1} < u \le F_k .
+\]
+
+\(Y_t\) is measurable, because the preimage of each atom \(\{v_k\}\) is the
+interval \((F_{k-1}, F_k]\). Its law, the pushforward of Lebesgue
+measure, is exactly \(P_t\):
+
+\[
+\mathrm{Leb}\big(Y_t^{-1}(\{v_k\})\big) = F_k - F_{k-1} = P_t(\{v_k\}).
+\]
+
+The Gumbel-max construction gives the same law without normalizing: with
+\(G_v\) independent standard Gumbel variables, \(\arg\max_v (z_v + G_v)\) has
+law \(\sigma(z)\) (\S\ref{sec:math:I7}). In both constructions the randomness is external and
+independent of \(\theta\): the model supplies the measure, and a separate source
+of noise supplies the draw.
+
+\textbf{What training asks of the measure.} During training the
+reference token \(y_t\) defines a target measure. With label smoothing \(\varepsilon =
+0.1\), it is
+
+\[
+q_t = (1-\varepsilon)\,\delta_{y_t} + \varepsilon\, u_{\mathcal V}, \qquad \mathcal L_t = H(q_t, P_t) = H(q_t) + \mathrm{KL}(q_t \,\|\, P_t),
+\]
+
+with \(u_{\mathcal{V}}\) the uniform measure. (Implementations differ in detail; some
+spread \(\varepsilon\) over the \(|\mathcal{V}|-1\) non-reference tokens only. The argument
+below is unchanged.) By Gibbs' inequality
+(\S\ref{sec:math:I10}) the loss is minimized at \(P_t = q_t\), a measure that charges
+every atom; smoothing thus keeps the target inside the open simplex,
+which is the range of the softmax. How training selects \(\theta\) is outside the
+scope of this chapter.
+
+\textbf{In floating point.} The exact \(P_t\) charges every atom, but
+computed probabilities can underflow to zero, so the computed measure
+can have null events the ideal one lacks. Implementations compute \(\log
+\sigma(z) = z - \max z - \log \sum_u e^{z_u - \max z}\), using the shift
+invariance of Step 1 to avoid overflow.
+
+\subsection{Sequences: from one token to a measure on
+translations}\label{sec:math:IV6}
+
+Section IV.5 produced one measure per position. Chained along the target
+sentence, these measures define a single probability measure on the
+space of whole translations, conditional on the source.
+
+\textbf{The sample space of translations.} Fix a source sentence \(x\).
+Outputs are sequences \(\omega = (y_{1}, y_{2}, \ldots)\) in
+\(\mathcal{V}^{\mathbb{N}}\); a finite translation is a sequence
+that reaches the end symbol \(\langle/\mathrm{s}\rangle\) and stays there. The \(\sigma\)-algebra is
+generated by the cylinder sets of \S\ref{sec:math:I6},
+
+\[
+C(y_1,\dots,y_t) = \{\omega\in\mathcal V^{\mathbb N} : \omega_1 = y_1,\dots,\omega_t = y_t\}, \qquad \mathcal F_t = \sigma(\omega_1,\dots,\omega_t),
+\]
+
+and the filtration \(\mathcal{F}_{0} \subset \mathcal{F}_{1} \subset \mathcal{F}_{2} \subset \cdots\) records what is
+known after \(t\) tokens. The event ``the translation begins with Das Haus''
+is a cylinder of length 2 and belongs to \(\mathcal{F}_{2}\).
+
+\textbf{Predictability: the causal mask as a measurability statement.}
+The decoder input at position \(s\) is \(y_{s-1}\), shifted right by one. By
+induction over the layers of \S\ref{sec:math:IV1}, row \(t\) of every decoder layer depends
+only on the inputs at positions \(1, \ldots, t\) and on the memory \(H\):
+
+\begin{itemize}
+\tightlist
+\item
+  causal self-attention: row \(t\) of its kernel is supported on \(\{1,
+  \ldots, t\}\) (\S\ref{sec:math:IV3});
+\item
+  cross-attention: it reads \(H = \mathrm{Enc}(x)\), which depends on \(x\) alone;
+\item
+  feed-forward layers, normalization and residual maps act row by row.
+\end{itemize}
+
+So \(h_t\) is a function of \((x, y_{1}, \ldots, y_{t-1})\). By the
+Doob--Dynkin lemma (\S\ref{sec:math:I6}), the next-token kernel is \(\mathcal{F}_{t-1}\)-measurable
+for fixed \(x\):
+
+\[
+y \mapsto p_\theta(\,\cdot\mid x, y_{<t}) \ \text{is}\ \mathcal F_{t-1}\text{-measurable for each fixed } x.
+\]
+
+The sequence of kernels is predictable: each distribution is fixed
+before its token is drawn. The encoder's output, by contrast, depends on the whole source at once.
+The decoder's causal mask and the encoder's unmasked self-attention are
+thus two measurability conditions.
+
+\textbf{One measure on all translations.} By the Ionescu-Tulcea theorem
+(\S\ref{sec:math:I6}), the predictable kernels determine a unique probability measure
+\(P_\theta(\cdot \mid x)\) on \((\mathcal{V}^{\mathbb{N}}, \mathcal{F}_\infty)\). On cylinders
+it is given by the chain rule:
+
+\[
+P_\theta\big(C(y_1,\dots,y_t)\mid x\big) = \prod_{s=1}^{t} p_\theta(y_s \mid x, y_{<s}).
+\]
+
+The cylinders form a \(\pi\)-system generating \(\mathcal{F}_\infty\), so by the \(\pi\)-\(\lambda\) theorem
+these values determine \(P_\theta(\cdot \mid x)\) uniquely. Letting \(x\) vary, \(x \mapsto P_\theta(\cdot
+\mid x)\) is a Markov kernel from source sentences to target sequences: this
+kernel is the translation model.
+
+\textbf{Generation realizes the measure path by path.} Draw independent
+uniforms \(U_{1}, U_{2}, \ldots\) and set \(Y_t = G(p_\theta(\cdot \mid x,
+Y_{<t}), U_t)\), with \(G\) the inverse-distribution construction
+of \S\ref{sec:math:IV5}. Each \(Y_t\) is \(\sigma(U_1, \ldots, U_t)\)-measurable, and the law of \((Y_{1},
+Y_{2}, \ldots)\) is exactly \(P_\theta(\cdot \mid x)\). Equivalently, generation is a
+Markov chain on the countable set of prefixes \(\mathcal{V}^*\), whose
+transitions append one token until \(\langle/\mathrm{s}\rangle\) is emitted. States ending in
+\(\langle/\mathrm{s}\rangle\) are absorbing: once the end symbol appears the chain stays
+put, which amounts to a cemetery state that emits nothing further.
+
+\textbf{Termination.} The first time the end symbol appears, \(T = \inf\{t
+: Y_t = \langle/\mathrm{s}\rangle\}\), is a stopping time: \(\{T = t\} \in \mathcal{F}_t\). Generation ends
+almost surely exactly when \(P_\theta(T < \infty \mid x) = 1\), the tightness
+condition; in Markov-chain terms, the absorbing state is reached with
+probability one. The 2017 decoder also capped output length at the input
+length plus 50, which makes termination certain in practice.
+
+\textbf{The target of the kernel.} Let \(P^*\) be the true joint law of
+source and target sentences. The ideal next-token law is a conditional
+expectation, and by \S\ref{sec:math:I6} an orthogonal projection:
+
+\[
+P^*(Y_t = v \mid x, Y_{<t}) = \mathbb E^*\big[\mathbf 1_{\{Y_t = v\}} \,\big|\, \sigma(x)\vee\mathcal F_{t-1}\big],
+\]
+
+the projection of the indicator of the event \(\{Y_t = v\}\) onto the
+subspace of \(L^{2}(P^*)\) of functions of the source and the prefix. By
+Doob--Dynkin it is a function of \((x, y_{<t})\), and the decoder is
+a parametrized family of exactly such functions. The divergence between
+the true and the model measures on whole sequences decomposes along the
+filtration as a sum of per-token divergences (\S\ref{sec:math:I10}), which is why a
+per-token loss trains a sequence model.
+
+\subsection{Decoding and the idealized
+model}\label{sec:math:IV7}
+
+The measure \(P_\theta(\cdot \mid x)\) is the model; a decoding rule is a separate
+procedure applied to it. The 2017 paper decoded by search rather than by
+sampling.
+
+\textbf{Sampling versus search.} Three rules act on the same measure:
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Rule
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Output
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Relation to \(P_\theta(\cdot \mid x)\)
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Ancestral sampling (\S\ref{sec:math:IV6}) & a random translation & a draw whose law is
+exactly \(P_\theta(\cdot \mid x)\) \\
+Greedy decoding & \(\arg\max_v p_\theta(v \mid x, y_{<t})\) at each step &
+the \(\tau \to 0\) limit of per-step sampling; not in general the most likely
+sequence \\
+Beam search, beam 4, length penalty \(\alpha = 0.6\) & an approximate maximizer
+of \(\log P_\theta(y \mid x) / \mathrm{lp}(y)\) & a deterministic functional of the measure,
+not a draw from it \\
+\end{longtable}
+
+Beam search keeps the four best prefixes at each step and compares
+finished candidates after dividing their log-probability by a length
+penalty \(\mathrm{lp}(y)\) that grows with length, so that shorter outputs are not
+automatically preferred. It is a heuristic for the mode of a reweighted
+sequence measure. The BLEU scores of Section~\ref{sec:math-original} therefore measure a
+mode-seeking functional of \(P_\theta\), not typical samples from it.
+
+\textbf{The model that was computed.} The analysis of Parts I and IV
+concerns the exact operators. Three features of the 2017 setup separate
+the computed model from that idealization:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Finite precision.} Every operator was evaluated in floating
+  point on P100 GPUs, so the states lie on a finite grid and small
+  probabilities can underflow (\S\ref{sec:math:I9}, \S\ref{sec:math:IV5}).
+\item
+  \textbf{Dropout.} During training, dropout (rate 0.1 for the base model, 0.3 for the big English--German
+  model) multiplies
+  sublayer outputs by random masks. The training-time network is
+  therefore itself a random operator, a Markov kernel from inputs to
+  states, and only the test-time network, with dropout off, is the
+  deterministic composition of \S\ref{sec:math:IV1}.
+\item
+  \textbf{Finite length.} The decoder never runs beyond input length
+  plus 50 tokens, so the measure actually realized is the image of
+  \(P_\theta(\cdot \mid x)\) under truncation at that length.
+\end{itemize}
+
+\textbf{The chain as a whole.} Each stage of the model lives on a
+different mathematical object, and each passage between stages is one of
+the operators or constructions of Section~\ref{sec:math-tools}:
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2500}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Stage
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Object
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Space
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Structure used
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Input & source \(x\), prefix \(y_{<t}\) & \(\mathcal{V}^{n}\),
+\(\mathcal{V}^{t- 1}\) & finite sets, power-set \(\sigma\)-algebras \\
+Embedding & \(E = \tau \circ \varepsilon \circ \iota\) & \(\mathbb{R}^{n\times d}\) & affine map into
+a Hilbert space \\
+Encoder and decoder & 12 layers composed with \(\circ\) &
+\(\mathbb{R}^{n\times d}\), \(\mathbb{R}^{m\times d}\) & nonlinear
+operators; attention kernels inside \\
+Readout & \(\lambda \circ \pi_t\) &
+\(\mathbb{R}^{|\mathcal{V}|} /
+\mathbb{R}\mathbf{1}\) & linear functionals, Riesz representers \\
+Softmax & \(\sigma\) & \(\Delta(\mathcal{V})\) & probability measures on
+\((\mathcal{V}, 2^{\mathcal{V}})\) \\
+Sampling & \(Y_t\) & \(\mathcal{V}\) & a random variable with law \(P_t\) \\
+Sequence & \(P_\theta(\cdot \mid x)\) & \((\mathcal{V}^{\mathbb{N}}, \mathcal{F}_\infty)\) &
+filtration, predictable kernels, Ionescu-Tulcea \\
+\end{longtable}
+
+Read from top to bottom, this is the thesis of the chapter: the
+Transformer is a composition of operators on Hilbert spaces, followed by
+a single map into the space of probability measures on the \(\sigma\)-algebra of
+token events; sampling, applied step after step along a filtration,
+turns that measure into text.
+
+\section{Beyond the Structure of the Family}
+
+A transformer, as described in this chapter, is a map \(\theta \mapsto P_\theta\) from
+parameters to measures on sequence space. The geometry of Hilbert spaces
+carries its representations; spectral theory governs its parameters and
+local behavior; measure-theoretic probability, organized by the
+\(\sigma\)-algebra of events and its filtration, turns its output into
+distributions over tokens and sequences. Everything here concerns the
+structure of that family. The natural next question, which this chapter
+leaves open, is which member to choose:
+pretraining as maximum likelihood, fine-tuning, reinforcement learning
+with a KL penalty, whose optimum is a Gibbs tilt of a reference measure,
+and on-policy distillation between sequence measures.
+
+\section{Sources}
+
+Primary sources:
+
+\begin{itemize}
+\tightlist
+\item
+  Vaswani et al., \href{https://arxiv.org/abs/1706.03762}{Attention Is
+  All You Need}, arXiv:1706.03762 (first version June 2017; results
+  quoted from v1 unless noted).
+\end{itemize}
+
+Further references:
+
+\begin{itemize}
+\tightlist
+\item
+  Approximation theory: Cybenko (1989); Leshno, Lin, Pinkus and Schocken
+  (1993); Barron (1993); Yarotsky (2017, 2018); DeVore, Howard and
+  Micchelli; Suzuki (2019); DeVore, Hanin and Petrova, \emph{Neural
+  Network Approximation}, Acta Numerica (2021).
+\item
+  Layer normalization placement: Xiong et al., \emph{On Layer
+  Normalization in the Transformer Architecture}, ICML (2020).
+\item
+  Rank collapse in attention stacks: Dong, Cordonnier and Loukas,
+  \emph{Attention is not all you need: pure attention loses rank doubly
+  exponentially with depth}, ICML (2021).
+\item
+  Kernel methods: Steinwart and Christmann, \emph{Support Vector
+  Machines}, for Mercer's theorem and eigenvalue decay.
+\item
+  Lipschitz continuity of attention: Kim, Papamakarios and Mnih,
+  \emph{The Lipschitz Constant of Self-Attention}, ICML (2021).
+\item
+  Differentiating nonsmooth networks: Kakade and Lee, \emph{Provably
+  Correct Automatic Subdifferentiation for Qualified Programs}, NeurIPS
+  (2018); Bolte and Pauwels, \emph{Conservative Set Valued Fields,
+  Automatic Differentiation, Stochastic Gradient Methods and Deep
+  Learning}, Mathematical Programming (2021).
+\item
+  Rotary position encodings: Su et al., \emph{RoFormer: Enhanced
+  Transformer with Rotary Position Embedding}, arXiv:2104.09864 (2021).
+\end{itemize}

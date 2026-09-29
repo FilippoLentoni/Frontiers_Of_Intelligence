@@ -74,6 +74,8 @@ encoder-decoder architecture. The encoder processed the source sequence with ful
 bidirectional self-attention; the decoder generated the target sequence autoregressively
 through masked self-attention over prior outputs and cross-attention over encoder
 representations.
+Chapter~\ref{ch:math-transformers} restates this architecture as a composition
+of operators and a Markov kernel, for readers who want the full mathematical treatment.
 
 The architecture established the design patterns that remain central to modern models:
 attention sublayers for token-to-token interaction, position-wise feedforward sublayers
